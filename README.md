@@ -6,8 +6,7 @@ strangers give you, e.g. a feed URL that a user types in, or a link in a
 document you fetched. Requests and responses are plain maps.
 
 - **Only the public internet, if you ask.** A stranger's URL can't reach
-  your own machine, your local network or your cloud's metadata service,
-  not even by a redirect.
+  your own machine or your local network, not even by a redirect.
 - **Limits on every exchange.** Neither a slow server nor a gzip bomb can
   hold you up.
 - **Secrets that don't leak.** Passwords and tokens stay out of your
@@ -27,9 +26,9 @@ There are no dependencies but Clojure.
 Getting started
 ---------------
 
-It requires Clojure 1.11+ and Java 11+. Add it to the `:deps` in your
-`deps.edn` as a Git dependency, with the SHA of the latest commit on
-`master`:
+The library requires Clojure 1.11+ and Java 11+. Add it to the `:deps`
+in your `deps.edn` as a Git dependency, with the SHA of the latest
+commit on `master`:
 
 ```clojure
 dk.simongray/wary-fetch
@@ -68,8 +67,9 @@ and a document that hasn't changed comes back as a 304 without a body:
 ;; => 304
 ```
 
-A URL that the `:allow-pred` refuses throws an ex-info with the `:type`
-`:dk.simongray.wary-fetch/refused`, and no request goes out:
+When the `:allow-pred` refuses a URL, no request goes out, and
+`http/fetch!` throws an ex-info with the `:type`
+`:dk.simongray.wary-fetch/refused`:
 
 ```clojure
 (http/fetch! "http://169.254.169.254/latest/meta-data"
@@ -80,8 +80,8 @@ A URL that the `:allow-pred` refuses throws an ex-info with the `:type`
 Requests
 --------
 
-A request is a map of `:method`, `:url`, `:headers` and `:body`, which
-`http/send!` sends, and `http/fetch!` makes one for you. The request can
+A request is a map of `:method`, `:url`, `:headers` and `:body`. Send one
+with `http/send!`, or let `http/fetch!` make one for you. A request can
 also have these keys:
 
 - `:timeout-seconds`, the limit of the whole exchange, 30 by default
@@ -92,17 +92,19 @@ also have these keys:
 - `:range`, the first and the last byte to ask for
 
 An exchange that goes beyond a limit throws with the `:type`
-`:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`,
-and `http/timeout?` also knows the timeouts of the platform's client.
+`:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`.
+To tell whether an exception is a timeout, including one from the
+platform's own client, use `http/timeout?`.
+
 Use `http/send-public!` to send a request with `url/public?` as its
 `:allow-pred`, and `http/try-send!` to get the exception in a map instead
 of a throw. The `http/failure` function gives an exception as data.
 
-The other functions that send, e.g. `http/fetch!`, take the limits,
-`:allow-pred` and `:user-agent` as options, and `http/with-options` puts
-them on a request of your own. The `http/fetch!` function also takes
-`:credentials`, `:accept` and `:send`, a function to send the request in
-place of `http/send!`.
+The functions that make a request for you, e.g. `http/fetch!`, take the
+limits, `:allow-pred` and `:user-agent` as options, and
+`http/with-options` puts them on a request of your own. The `http/fetch!`
+function also takes `:credentials` and `:accept`, and `:send` for a
+function that sends the request in place of `http/send!`.
 
 Credentials
 -----------
@@ -129,9 +131,10 @@ e.g. for another HTTP client.
 When to ask again
 -----------------
 
-A response from `http/fetch!` has the `:not-before` instant when its
-Retry-After or Cache-Control headers say how long to wait. The
-`headers/not-before` function reads the same headers on their own:
+A response from `http/fetch!` has the `:not-before` instant if its
+Retry-After, Cache-Control or Expires header says when to ask again. To
+get the same instant from the headers of any response, use
+`headers/not-before`:
 
 ```clojure
 (require '[dk.simongray.wary-fetch.headers :as headers])
@@ -142,18 +145,18 @@ Retry-After or Cache-Control headers say how long to wait. The
 ```
 
 The wait is as long as the server says. To poll a server that might be
-set up wrong, cap it with the option `:max-wait-seconds`, e.g. 3600 for
-an hour.
+set up wrong, cap the wait with `:max-wait-seconds`, which both functions
+take, e.g. 3600 for an hour.
 
-The `dk.simongray.wary-fetch.headers` namespace reads the other headers
-of a response too, e.g. `headers/links` reads a Link header and
-`headers/media-type` a Content-Type.
+The `dk.simongray.wary-fetch.headers` namespace has functions for the
+other headers of a response too, e.g. `headers/links` for a Link header
+and `headers/media-type` for a Content-Type.
 
 Media files
 -----------
 
-Ask about a large file without downloading it with `http/probe!`, which
-sends a HEAD request and a request for the first two bytes:
+To ask about a large file without downloading it, use `http/probe!`,
+which sends a HEAD request and a request for the first two bytes:
 
 ```clojure
 (http/probe! "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg")
@@ -174,9 +177,9 @@ The proxy
 ---------
 
 A web page can only read an answer from another site when that site
-allows it with CORS headers, and most don't. Run `proxy/handler` on your
-own server, behind your login, as a Ring handler for a route such as
-`/proxy`:
+allows it with CORS headers, and most don't. Make a Ring handler with
+`proxy/handler`, and mount it on your own server, behind your login, at
+a route such as `/proxy`:
 
 ```clojure
 (require '[dk.simongray.wary-fetch.proxy :as proxy])
@@ -185,10 +188,10 @@ own server, behind your login, as a Ring handler for a route such as
   (proxy/handler))
 ```
 
-It fetches the URL of its `url` parameter, only on the public internet,
-and answers with what came back. In the page, send each request through
-it with `proxy/sender`, and the response is what a direct request would
-give:
+The handler fetches the URL in its `url` parameter, as long as that URL
+is on the public internet, and answers with what came back. In the page,
+send each request through it with `proxy/sender`, and the response is
+what a direct request would give:
 
 ```clojure
 (http/fetch! "https://example.com/feed.xml"
@@ -202,9 +205,10 @@ In ClojureScript
 ----------------
 
 The functions that send give promises in ClojureScript. To write code for
-both platforms, chain them with `async/then`, which takes a value, a
-future or a promise alike. The `dk.simongray.wary-fetch.async` namespace
-has a few more functions like it.
+Clojure and ClojureScript at once, chain them with `async/then`, which
+takes a value, a future or a promise alike. The
+`dk.simongray.wary-fetch.async` namespace has a few more functions like
+it.
 
 In Node, `http/send!` sends with node:http, and its guards are those of
 the JVM. It looks up a name before it asks the `:allow-pred`, so that
@@ -220,20 +224,21 @@ weaker:
 - The fetch function follows redirects itself, so `:allow-pred` doesn't
   see them.
 
-A request from a page comes from the user's own device anyway. CORS also
-hides the headers that a server doesn't expose, and `:filtered?` marks
-such a response.
+Those guards matter less in a page, since its requests come from the
+user's own device rather than from your server. CORS also hides the
+headers that a server doesn't expose, and `:filtered?` marks such a
+response.
 
 Principles
 ----------
 
 - **Standards first.** The code follows RFC 9110, RFC 9111 and the other
   specs it implements, and cites their sections.
-- **Plain data.** Requests and responses are maps, so any HTTP client can
-  send a request, and you can send one with a function of your own.
+- **Plain data.** Requests and responses are maps, so you can send a
+  request with any HTTP client, or with a function of your own.
 - **One codebase.** Apart from the client of each platform, the library
   is written in `.cljc`, with no dependencies but Clojure, and it behaves
-  the same on both platforms wherever JavaScript allows it.
+  the same everywhere, as far as JavaScript allows.
 
 Development
 -----------

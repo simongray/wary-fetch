@@ -1,10 +1,10 @@
 (ns dk.simongray.wary-fetch
   "Requests as maps, and the client that sends them.
 
-  On the JVM, the client is java.net.http. It follows redirects, accepts
-  gzip, makes conditional requests, and decodes the body by the charset
-  that the server or the document declares. In ClojureScript, the client
-  is fetch.
+  On the JVM, the client is java.net.http, and in Node it's node:http.
+  Either follows redirects, accepts gzip, makes conditional requests, and
+  decodes the body by the charset that the server or the document
+  declares. In a browser, the client is fetch.
 
   A request is a map of :method, :url, :headers and :body, and it's a GET
   unless :method names another method. Any HTTP client can send a request
@@ -17,6 +17,7 @@
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.date :as date]
             [dk.simongray.wary-fetch.encoding :as encoding]
+            #?(:cljs [dk.simongray.wary-fetch.node :as node])
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.url :as url])
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream
@@ -236,14 +237,13 @@
                 (.build)))))
 
 ;; RFC 9110, section 8.4.1.3: x-gzip is gzip
-#?(:clj
-   (defn ^:no-doc gzipped?
-     "Whether the response with `headers` says that its body is gzipped."
-     [headers]
-     (let [coding (some-> (header headers "content-encoding")
-                          str/trim
-                          str/lower-case)]
-       (contains? #{"gzip" "x-gzip"} coding))))
+(defn ^:no-doc gzipped?
+  "Whether the response with `headers` says that its body is gzipped."
+  [headers]
+  (let [coding (some-> (header headers "content-encoding")
+                       str/trim
+                       str/lower-case)]
+    (contains? #{"gzip" "x-gzip"} coding)))
 
 #?(:clj
    (defn ^:no-doc headers-of
@@ -464,22 +464,17 @@
                            :cljs (= "TimeoutError" (.-name %))))
                    causes))))
 
-#?(:clj
-   (defn- redirect-target
-     "Where the redirect `response` to `uri` leads, or nil when it names no
-     http or https URL with a host. It's nil too when it leaves https for
-     http, which the client of the JDK refuses as well."
-     [^URI uri ^HttpResponse response]
-     (when-let [location (-> (.headers response)
-                             (.firstValue "location")
-                             (.orElse nil))]
-       (when-let [target (some-> (url/absolute-url (str uri) location) (URI.))]
-         (let [from (some-> (.getScheme uri) str/lower-case)
-               to   (some-> (.getScheme target) str/lower-case)]
-           (when (and (#{"http" "https"} to)
-                      (.getHost target)
-                      (not (and (= "https" from) (= "http" to))))
-             target))))))
+(defn- redirect-url
+  "Where a redirect of the request to `url` with the Location `location`
+  leads, or nil when it names no http or https URL with a host. It's nil
+  too when it leaves https for http, which the client of the JDK refuses
+  as well."
+  [url location]
+  (when-let [target (some->> location (url/absolute-url url))]
+    (when (and (url/web-url? target)
+               (not (and (= "https" (url/scheme url))
+                         (= "http" (url/scheme target)))))
+      target)))
 
 (defn ^:no-doc refusal
   "The exception of a request to `url` that :allow-pred refused."
@@ -512,6 +507,15 @@
                       (into {} (remove credential?)))
            :body    (when-not get? body))))
 
+;; RFC 9110, section 15.4
+(def ^:no-doc redirect-statuses
+  "The statuses of the redirects that send! follows."
+  #{301 302 303 307 308})
+
+(def ^:no-doc max-redirects
+  "How many redirects send! follows at most."
+  5)
+
 #?(:clj
    (defn ^:no-doc send-following!
      "Send the `request`, follow its redirects until the instant `deadline`
@@ -535,27 +539,28 @@
                response  (.send ^HttpClient @client outgoing
                                 (HttpResponse$BodyHandlers/ofInputStream))
                status    (.statusCode response)
-               redirect? (and (#{301 302 303 307 308} status)
-                              (< (count chain) 5))
-               target    (when redirect?
-                           (redirect-target uri response))]
+               location  (-> (.headers response)
+                             (.firstValue "location")
+                             (.orElse nil))
+               target    (when (and (redirect-statuses status)
+                                    (< (count chain) max-redirects))
+                           (some-> (redirect-url url location) url/legal-url))]
            (if-not target
              [response chain]
              (do (.close ^InputStream (.body response))
-                 (recur (redirected request status (str target))
+                 (recur (redirected request status target)
                         (conj chain [status url (headers-of response)])))))))))
 
-#?(:clj
-   (defn- permanent-url
-     "The URL that the first request moved to for good, by the redirects in
-     `chain` before `final-url`, or nil when the first isn't permanent.
+(defn- permanent-url
+  "The URL that the first request moved to for good, by the redirects in
+  `chain` before `final-url`, or nil when the first isn't permanent.
 
-     A redirect is permanent when it's a 301 or a 308, and the URL is the
-     one that the permanent redirects at the start of the chain lead to."
-     [chain final-url]
-     (let [n (count (take-while #(#{301 308} (first %)) chain))]
-       (when (pos? n)
-         (get (conj (mapv second chain) final-url) n)))))
+  A redirect is permanent when it's a 301 or a 308, and the URL is the one
+  that the permanent redirects at the start of the chain lead to."
+  [chain final-url]
+  (let [n (count (take-while #(#{301 308} (first %)) chain))]
+    (when (pos? n)
+      (get (conj (mapv second chain) final-url) n))))
 
 (defn ^:no-doc prefix-length
   "How much of the body of an answer of `status` to read for a request of
@@ -590,19 +595,26 @@
      first, and the browser sends its own User-Agent."
      (or (exists? js/document) (exists? js/WorkerGlobalScope))))
 
+#?(:cljs
+   (def ^:no-doc node?
+     "Whether send! sends with node:http, as it does in Node, rather than
+     with fetch."
+     (and (not browser?) node/available?)))
+
 (defn- request-headers
   "The `headers` of a request for the bytes `range`, with the Range header,
   and with the User-Agent `agent` unless they name another or the browser
   sends its own.
 
-  On the JVM, a request for a range asks for bytes that aren't gzipped,
-  so that the offsets are those of the file."
+  On the JVM and in Node, a request for a range asks for bytes that aren't
+  gzipped, so that the offsets are those of the file."
   [headers range agent]
   (cond-> (merge #?(:clj  {"User-Agent" agent}
                     :cljs (when-not browser? {"User-Agent" agent}))
                  headers)
     range (assoc "Range" (str "bytes=" (first range) "-" (second range)))
-    #?@(:clj [range (assoc "Accept-Encoding" "identity")])))
+    #?@(:clj  [range (assoc "Accept-Encoding" "identity")]
+        :cljs [(and range node?) (assoc "Accept-Encoding" "identity")])))
 
 #?(:clj
    (defn- response-bytes
@@ -644,6 +656,114 @@
          moved       (assoc :permanent-url moved)
          (seq chain) (assoc :redirects chain)
          received    (assoc :content-range received)))))
+
+#?(:cljs
+   (defn- late
+     "The exception of a request to `url` that didn't end in time."
+     [url]
+     (ex-info (str "The request did not end in time: " url)
+              {:type ::timeout :url url})))
+
+#?(:cljs
+   (defn- checked!
+     "A promise of the addresses that the request to `url` may connect to,
+     once `allow-pred` took the URL, by the instant `deadline`, or of nil
+     for a host that's an address. It rejects with ::refused when
+     `allow-pred` refuses the URL.
+
+     A name is looked up first, so that url/public? checks its addresses
+     too."
+     [url allow-pred deadline]
+     (let [host (some-> (url/host url) (str/replace #"\.$" ""))
+           ask  (fn [found]
+                  (let [numbers (mapv (comp url/ip-address :address) found)]
+                    (if (binding [url/*addresses* (cond-> {}
+                                                    found (assoc host numbers))]
+                          (allow-pred url))
+                      found
+                      (throw (refusal url)))))]
+       (if (or (nil? host) (url/ip-address host))
+         (.then (js/Promise.resolve nil) ask)
+         (.then (node/lookup! host deadline #(late url)) ask)))))
+
+#?(:cljs
+   (defn- node-following!
+     "A promise of the answer to `request` before its body is read, the
+     redirects before it and the last request, as a vector. It follows the
+     redirects until the instant `deadline` and checks each URL with
+     `allow-pred`, as send-following! does on the JVM."
+     [request deadline allow-pred]
+     (letfn [(step [{:keys [url] :as request} chain]
+               (-> (checked! url allow-pred deadline)
+                   (.then #(node/open! (revealed request) % deadline
+                                       (fn [] (late url))))
+                   (.then (fn [{:keys [status headers] :as answer}]
+                            (let [location (header headers "location")
+                                  target   (when (and (redirect-statuses status)
+                                                      (< (count chain)
+                                                         max-redirects))
+                                             (redirect-url url location))]
+                              (if-not target
+                                [answer chain request]
+                                (do (node/close! answer)
+                                    (step (redirected request status target)
+                                          (conj chain
+                                                [status url headers])))))))))]
+       (step request []))))
+
+#?(:cljs
+   (defn- node-answer
+     "A promise of the response map for the `answer` of node:http to the
+     `request`, which came after the redirects `chain`."
+     [{:keys [status headers] :as answer} chain
+      {:keys [method url as range max-bytes] :as request}]
+     (let [received (content-range (header headers "content-range"))
+           gzipped  (gzipped? headers)
+           n        (prefix-length status (:start received) gzipped range
+                                   max-bytes)
+           moved    (permanent-url chain url)
+           inflate  (fn [b]
+                      (if gzipped
+                        (or (node/gunzip b max-bytes)
+                            (throw (too-large url max-bytes)))
+                        b))]
+       (-> (cond
+             ;; an answer to HEAD has no content by RFC 9110, section 9.3.2
+             (= :head method) (do (node/close! answer)
+                                  (js/Promise.resolve (js/Uint8Array. 0)))
+             n                (node/read! answer n nil nil)
+             :else            (node/read! answer nil max-bytes
+                                          #(too-large url max-bytes)))
+           (.then (fn [b]
+                    (cond-> {:status  status
+                             :url     url
+                             :headers headers
+                             :body    (when (and (not= 304 status)
+                                                 (pos? (.-length b)))
+                                        (if (= :bytes as)
+                                          (inflate b)
+                                          (encoding/decode (inflate b)
+                                                           (charset headers))))}
+                      moved       (assoc :permanent-url moved)
+                      (seq chain) (assoc :redirects chain)
+                      received    (assoc :content-range received))))))))
+
+#?(:cljs
+   (defn- node-send!
+     "A promise of the response to `request`, sent with node:http within
+     `timeout-seconds`, to URLs that `allow-pred` takes.
+
+     Gzip is accepted unless the headers name an Accept-Encoding."
+     [{:keys [headers] :as request} timeout-seconds allow-pred]
+     (let [deadline (+ (js/Date.now) (* 1000 timeout-seconds))
+           named?   (some #(= "accept-encoding" (str/lower-case (str %)))
+                          (keys headers))
+           request  (cond-> request
+                      (not named?) (assoc-in [:headers "Accept-Encoding"]
+                                             "gzip"))]
+       (.then (node-following! request deadline allow-pred)
+              (fn [[answer chain last-request]]
+                (node-answer answer chain last-request))))))
 
 #?(:cljs
    (defn- read-body
@@ -753,21 +873,27 @@
   answer, e.g. the page of a 404, no more bytes are read than the range
   names.
 
-  On the JVM, the URL is made legal first. Redirects are followed, five
-  at most, and never from https to http. A redirect to another origin
-  leaves the credentials behind, and :allow-pred must take the URL of
-  each redirect. The :redirects of the response list each redirect as a
-  vector of its status, the URL that answered with it, and the headers of
-  its answer. When the redirects begin with permanent ones,
-  :permanent-url is where the URL moved for good.
+  On the JVM and in Node, redirects are followed, five at most, and never
+  from https to http. A redirect to another origin leaves the credentials
+  behind, and :allow-pred must take the URL of each redirect. The
+  :redirects of the response list each redirect as a vector of its
+  status, the URL that answered with it, and the headers of its answer.
+  When the redirects begin with permanent ones, :permanent-url is where
+  the URL moved for good. On the JVM, the URL is made legal first.
 
-  In ClojureScript, fetch sends the request. It follows redirects itself
-  and doesn't report them, so :allow-pred doesn't see them. A browser lets a
-  page read an answer from another site only as far as the CORS headers
-  of the answer allow. It hides the headers that the answer doesn't
-  expose, e.g. Content-Range and ETag, and :filtered? marks such an
-  answer. A browser also sends its own User-Agent, so :user-agent counts
-  only outside one, e.g. in Node."
+  In Node, the name of a host is looked up before :allow-pred is asked,
+  and the request connects only to the addresses that it found, so that
+  url/public? checks the addresses that the request goes to. Each request
+  has a connection of its own, since one of a shared pool can lead to an
+  address that nobody checked for it.
+
+  In a browser, and in a runtime without the modules of Node, fetch sends
+  the request. It follows redirects itself and doesn't report them, so
+  :allow-pred doesn't see them. A browser lets a page read an answer from
+  another site only as far as the CORS headers of the answer allow. It
+  hides the headers that the answer doesn't expose, e.g. Content-Range
+  and ETag, and :filtered? marks such an answer. A browser also sends its
+  own User-Agent, so :user-agent counts only outside one."
   [{:keys [method headers timeout-seconds allow-pred]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
@@ -784,8 +910,14 @@
                    bytes            (response-bytes response request deadline)]
                (java-answer response bytes chain request))
        :cljs (let [{:keys [url body]} request]
-               (if-not (allow-pred url)
+               (cond
+                 node?
+                 (node-send! request timeout-seconds allow-pred)
+
+                 (not (allow-pred url))
                  (js/Promise.reject (refusal url))
+
+                 :else
                  ;; a hidden header and a hidden body go out as their texts
                  (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
                        verb   (str/upper-case (name (or method :get)))
@@ -799,7 +931,7 @@
 
 (defn send-public!
   "Send the `request`, but only to a host on the public internet. On the
-  JVM, the host of each redirect must be public too.
+  JVM and in Node, the host of each redirect must be public too.
 
   It sends no request to the network of the app or of its device, and
   throws ::refused instead, or in ClojureScript rejects with it."

@@ -44,6 +44,7 @@
    (deftest fetching-by-range-with-fetch
      (async done
        (let [real        (.-fetch js/globalThis)
+             node?       http/node?
              pulls       (atom 0)
              whole       (js/ReadableStream. #js {:pull (fn [controller]
                                                           (if (< (swap! pulls inc) 100)
@@ -54,7 +55,8 @@
                                 (js/Response. whole
                                               #js {:status 200 :headers #js {"content-length" (str (* 99 65536))}})])
              fetch-bytes (http/fetcher "https://example.org/a.mp3" {})]
-         ;; the global fetch, as the fetcher finds it
+         ;; the global fetch, which sends outside Node
+         (set! http/node? false)
          (set! (.-fetch js/globalThis) (fn [_ _]
                                          (let [res (first @answers)]
                                            (swap! answers rest)
@@ -69,15 +71,18 @@
              (.catch (fn [e] (is false (str "rejected: " e))))
              (.finally (fn []
                          (set! (.-fetch js/globalThis) real)
+                         (set! http/node? node?)
                          (done))))))))
 
 #?(:cljs
    (deftest probing-with-fetch
      (async done
        (let [real     (.-fetch js/globalThis)
+             node?    http/node?
              requests (atom [])
              agents   (atom #{})]
-         ;; the global fetch, as send! finds it
+         ;; the global fetch, which sends outside Node
+         (set! http/node? false)
          (set! (.-fetch js/globalThis)
                (fn [_ init]
                  (swap! requests conj [(.-method init) (or (aget (.-headers init) "Range") nil)])
@@ -97,6 +102,7 @@
              (.catch (fn [e] (is false (str "rejected: " e))))
              (.finally (fn []
                          (set! (.-fetch js/globalThis) real)
+                         (set! http/node? node?)
                          (done))))))))
 
 (deftest credentials-as-a-header

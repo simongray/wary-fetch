@@ -9,8 +9,9 @@ where a request goes and on what comes back.
 
 - **Only the public internet, if you ask.** With `url/public?` as the
   `:allow-pred`, a request for localhost, the local network or a cloud
-  metadata address throws instead of going out. On the JVM, every address
-  that a name resolves to is checked, and so is every redirect.
+  metadata address throws instead of going out. On the JVM and in Node,
+  every address that a name resolves to is checked, and so is every
+  redirect.
 - **Limits on every exchange.** A request has a time limit and a limit on
   the size of its body, counted after gzip is undone, so neither a slow
   server nor a gzip bomb can hold you up.
@@ -208,16 +209,23 @@ both platforms, chain them with `async/then`, which takes a value, a
 future or a promise alike. The `dk.simongray.wary-fetch.async` namespace
 has a few more functions like it.
 
-Two of the guards are weaker in JavaScript:
+In Node, `http/send!` sends with node:http, and its guards are those of
+the JVM. It looks up a name before it asks the `:allow-pred`, so that
+`url/public?` checks every address of the name, and the request then
+connects only to those addresses. It follows the redirects itself, and
+asks the `:allow-pred` about each.
 
-- The library doesn't resolve names in JavaScript, so `url/public?`
-  checks the name itself, and refuses e.g. localhost and names under
-  .local.
+In a browser, `http/send!` sends with fetch, and two of the guards are
+weaker:
+
+- A page can't look up a name, so `url/public?` checks the name itself,
+  and refuses e.g. localhost and names under .local.
 - The fetch function follows redirects itself, so `:allow-pred` doesn't
   see them.
 
-In a browser, CORS also hides the headers that a server doesn't expose,
-and `:filtered?` marks such a response.
+A request from a page comes from the user's own device anyway. CORS also
+hides the headers that a server doesn't expose, and `:filtered?` marks
+such a response.
 
 Principles
 ----------
@@ -226,9 +234,9 @@ Principles
   specs it implements, and cites their sections.
 - **Plain data.** Requests and responses are maps, so any HTTP client can
   send a request, and you can send one with a function of your own.
-- **One codebase.** The library is written in `.cljc`, with no
-  dependencies but Clojure, and it behaves the same on both platforms
-  wherever JavaScript allows it.
+- **One codebase.** Apart from the client of Node, the library is
+  written in `.cljc`, with no dependencies but Clojure, and it behaves
+  the same on both platforms wherever JavaScript allows it.
 
 Development
 -----------

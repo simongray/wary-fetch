@@ -25,6 +25,25 @@
   #?(:clj  (String. ^bytes b "UTF-8")
      :cljs (.decode (js/TextDecoder.) b)))
 
+#?(:cljs
+   (defn with-node-server
+     "A promise of what `f` gives, as a promise or a value, called with the
+     base URL of a server of node:http on 127.0.0.1 that answers each
+     request with `(handler req res)`. The server closes when it settles."
+     [handler f]
+     (let [^js server (.createServer (js/require "node:http") handler)]
+       (js/Promise.
+        (fn [resolve reject]
+          (.listen server 0 "127.0.0.1"
+                   (fn []
+                     (-> (js/Promise.resolve nil)
+                         (.then #(f (str "http://127.0.0.1:"
+                                         (.-port (.address server)))))
+                         (.finally (fn []
+                                     (.closeAllConnections server)
+                                     (.close server)))
+                         (.then resolve reject)))))))))
+
 #?(:clj
    (defn- answer
      "What the server of `with-server` answers the request for the file

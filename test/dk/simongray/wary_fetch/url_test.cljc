@@ -95,7 +95,18 @@
                                 "https://nas/" "https://intranet./" "http://127.0.0.1./"])
          "a name with a dot at its end, and a name without a dot, which is a name of the local network")
      (is (every? url/public? ["https://podcastindex.org/" "https://podcastindex.org./"])
-         "a name that JavaScript does not look up")))
+         "a name that nobody looked up")))
+
+#?(:cljs
+   (deftest names-that-send-looked-up
+     (binding [url/*addresses* {"a.example" [[93 184 216 34]]}]
+       (is (url/public? "https://a.example/")))
+     (binding [url/*addresses* {"a.example" [[93 184 216 34] [127 0 0 1]]}]
+       (is (not (url/public? "https://a.example/")) "every address of the name"))
+     (binding [url/*addresses* {"a.example" [[0 0 0 0 0 0 0 0 0 0 0xff 0xff 10 0 0 1]]}]
+       (is (not (url/public? "https://A.example./")) "an address of IPv6 that holds a private one"))
+     (binding [url/*addresses* {"a.example" [nil]}]
+       (is (not (url/public? "https://a.example/")) "an address that doesn't read"))))
 
 (deftest names-of-the-public-internet
   (is (every? url/public-name? ["podcastindex.org" "PodcastIndex.org." "a.b.example"]))

@@ -488,6 +488,13 @@
     (and (str/includes? h ".")
          (not (re-find #"(^|\.)(localhost|local|internal|home\.arpa)$" h)))))
 
+#?(:cljs
+   (def ^:dynamic ^:no-doc *addresses*
+     "The addresses that send! looked up in Node for the host of a request,
+     while it asks the :allow-pred of the request: a map of the host to the
+     numbers of each address, or nil for an address that doesn't read."
+     {}))
+
 (defn public?
   "Whether the host of the http or https URL `url` is on the public
   internet. A host on the network of the app or of its device isn't.
@@ -497,10 +504,14 @@
   resolved name for 30 seconds by default, so the request goes to the
   address that this function checked.
 
-  In a browser, ClojureScript can't resolve a name. There, the host
-  mustn't be an address that isn't public. A name must have a dot in it,
-  and it mustn't be localhost or a name under .localhost, .local,
-  .internal or .home.arpa."
+  In Node, send! looks up the name before it asks its :allow-pred, and
+  then each address must be public too. The request goes only to those
+  addresses.
+
+  In a browser, a name can't be looked up. There, the host mustn't be an
+  address that isn't public. A name must have a dot in it, and it mustn't
+  be localhost or a name under .localhost, .local, .internal or
+  .home.arpa."
   [url]
   #?(:clj  (try
              ;; the host as the client of the JDK reads it, which sends the
@@ -515,7 +526,9 @@
              (boolean (and h
                            (if-let [b (ip-address h)]
                              (public-ip? b)
-                             (public-name? h)))))))
+                             (and (public-name? h)
+                                  (every? #(and % (public-ip? %))
+                                          (get *addresses* h)))))))))
 
 (comment
   (query-string {:q "clojure podcasts" :max 10 :pretty true})

@@ -1,17 +1,8 @@
 (ns dk.simongray.wary-fetch
-  "Requests as maps, and the clients that send them.
+  "Requests and responses as maps, and the functions that send them.
 
-  On the JVM, the client is java.net.http, and in Node it's node:http.
-  Either follows redirects, accepts gzip, makes conditional requests, and
-  decodes the body by the charset that the server or the document
-  declares. In a browser, the client is fetch.
-
-  A request is a map of :method, :url, :headers and :body, and it's a GET
-  unless :method names another method. Any HTTP client can send a request
-  of this shape. A response is a plain map, whose :url is the final URL
-  after redirects.
-
-  A request moves no more bytes than its purpose needs."
+  The client is java.net.http on the JVM, node:http in Node and fetch in a
+  browser. A request moves no more bytes than its purpose needs."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
@@ -95,62 +86,35 @@
         :cljs [(and range node?) (assoc "Accept-Encoding" "identity")])))
 
 (defn send!
-  "Send the `request`, and give the response as a map of :status, :url,
-  :headers and :body. On the JVM it gives the response, and in
-  ClojureScript a promise of it.
+  "Send the `request` and give the response (or in ClojureScript a promise
+  of it).
 
   The request is a map of :method, :url, :headers and :body. It's a GET
-  unless :method names another method, and it goes with the :body, a
-  string or bytes, when it has one. A header and a body can be hidden
-  texts, and they go out as their texts. The body of the response is
-  text, with gzip undone. It's absent for a HEAD request and for an empty
-  body.
+  unless :method names another, and its headers and body can be hidden
+  texts. It can also have these keys:
 
-  The `request` can also have these keys:
+  - :as :bytes, for a body of bytes rather than text
+  - :timeout-seconds, the limit of the whole exchange (30 by default)
+  - :max-bytes, the limit of the body (100 MB by default or nil for none)
+  - :range, the first and the last byte to ask for (a nil last byte asks
+    for the rest)
+  - :allow-pred, a predicate of each URL, e.g. url/public?
+  - :user-agent, the User-Agent outside a browser unless the :headers
+    name one
 
-  - :as :bytes, for a body of bytes, e.g. of a media file
-  - :timeout-seconds, the limit of the whole exchange, 30 by default
-  - :max-bytes, the limit of the body, 100 MB by default, or nil for no
-    limit
-  - :range, a pair of the first and the last byte to ask for, as RFC
-    9110, section 14.1.2, has it. A nil last byte asks for the rest.
-  - :allow-pred, a predicate of a URL, as url/public? is
-  - :user-agent, the User-Agent unless the :headers name one, user-agent
-    by default
+  The response is a map of :status, the final :url, :headers and :body.
+  The body has gzip undone and text decoded by its charset. A 206 also
+  has the :content-range as a map of :start, :end and :total. In a
+  browser, :filtered? marks a response whose headers CORS hides.
 
-  An exchange that goes beyond a limit throws ::timeout or ::too-large.
-  On the JVM, the client of the JDK throws its HttpTimeoutException while
-  it waits for the headers. When :allow-pred refuses the URL of the
-  request, it throws ::refused.
+  Outside a browser it follows up to five redirects and asks :allow-pred
+  about each. It never follows one from https to http, and credentials
+  stay behind when a redirect leaves the origin. The response then lists
+  the :redirects and has a :permanent-url if the first ones were
+  permanent.
 
-  A server that sends the range answers 206, and the response then has
-  the :content-range, a map of :start, :end and :total. A server that
-  ignores ranges answers 200 with the whole file. The body is read no
-  further than the end of the range, when it has one. From another
-  answer, e.g. the page of a 404, no more bytes are read than the range
-  names.
-
-  On the JVM and in Node, redirects are followed, five at most, and never
-  from https to http. A redirect to another origin leaves the credentials
-  behind, and :allow-pred must take the URL of each redirect. The
-  :redirects of the response list each redirect as a vector of its
-  status, the URL that answered with it, and the headers of its answer.
-  When the redirects begin with permanent ones, :permanent-url is where
-  the URL moved for good. On the JVM, the URL is made legal first.
-
-  In Node, the name of a host is looked up before :allow-pred is asked,
-  and the request connects only to the addresses that it found, so that
-  url/public? checks the addresses that the request goes to. Each request
-  has a connection of its own, since one of a shared pool can lead to an
-  address that nobody checked for it.
-
-  In a browser, and in a runtime without the modules of Node, fetch sends
-  the request. It follows redirects itself and doesn't report them, so
-  :allow-pred doesn't see them. A browser lets a page read an answer from
-  another site only as far as the CORS headers of the answer allow. It
-  hides the headers that the answer doesn't expose, e.g. Content-Range
-  and ETag, and :filtered? marks such an answer. A browser also sends its
-  own User-Agent, so :user-agent counts only outside one."
+  It throws ::timeout or ::too-large past a limit and ::refused when
+  :allow-pred refuses a URL."
   [{:keys [method headers timeout-seconds allow-pred]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
@@ -167,11 +131,11 @@
                (browser/send! request timeout-seconds allow-pred)))))
 
 (defn send-public!
-  "Send the `request`, but only to a host on the public internet. On the
-  JVM and in Node, the host of each redirect must be public too.
+  "Send the `request` but only to a host on the public internet. On the
+  JVM and in Node the host of each redirect must be public too.
 
-  It sends no request to the network of the app or of its device, and
-  throws ::refused instead, or in ClojureScript rejects with it."
+  It sends no request to the network of the app or of its device and
+  throws ::refused instead (or in ClojureScript rejects with it)."
   [request]
   (send! (assoc request :allow-pred url/public?)))
 
@@ -246,8 +210,8 @@
      :cljs (js/Date.)))
 
 (defn fetch!
-  "GET the document at `url` with `opts`, and give the response with the
-  body as text, in ClojureScript as a promise.
+  "GET the document at `url` with `opts` and give the response with the
+  body as text (or in ClojureScript a promise of it).
 
   The response also has :etag and :last-modified when the server gives
   them. It has :not-before when the server says how long to wait.
@@ -340,29 +304,22 @@
            {:type ::failed :status status :url url}))
 
 (defn fetcher
-  "A function that fetches the bytes of the file at `url` by range, with
+  "A function that fetches the bytes of the file at `url` by range with
   `opts`.
 
-  The function takes a start and an end, with the end excluded. It gives
-  a map of :bytes, :start and :total, or in ClojureScript a promise of
-  it. You can wrap it to log or keep what it fetches. It throws as a
-  request does, and it throws ::failed with the :status for an answer
-  that's a failure.
-
-  A server that ignores ranges sends the file from its start. Then only
-  the bytes up to the end are read, and the answer is :whole?. A server
-  answers 416 for a range past the end of the file. Then the function
-  gives no bytes, and the size of the file, so that a reader can tell
-  that the file is shorter than it says. In a browser, the total is known
-  only when the server exposes Content-Range.
+  The function takes a start and an end (excluded) and gives a map of
+  :bytes, :start and :total (or in ClojureScript a promise of it). The
+  total is the size of the file when the answer tells it. A server that
+  ignores ranges sends the file from its start, and the map is then
+  :whole?. A range past the end of the file gives no bytes. An answer
+  that's a failure throws ::failed with the :status.
 
   The `opts` are these:
 
   - :headers of the requests
   - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
     takes them
-  - :send, a function that sends a request map in place of send!, as
-    send! does"
+  - :send, the function that sends each request, send! by default"
   ([url]
    (fetcher url {}))
   ([url {:keys [headers send] :or {send send!} :as opts}]
@@ -443,29 +400,20 @@
     (facts value)))
 
 (defn probe!
-  "Ask the server about the file at `url` with `opts`, and give the facts,
-  while no more than two bytes of the file move. On the JVM it gives
-  them, and in ClojureScript a promise of them.
+  "Ask the server about the file at `url` with `opts` and give the facts
+  (or in ClojureScript a promise of them). No more than two bytes of the
+  file move.
 
-  The result is a map of :head and :get, the facts of the answers to a
-  HEAD request and to a request for the first two bytes. The facts of a
-  request that failed are its exception under :error, as failure gives
-  it.
-
-  Most servers answer the second request with 206, and with the size of
-  the whole file in Content-Range. A server that ignores ranges answers
-  200, and two bytes of that answer are read. The HEAD request asks for
-  the file as it is, not gzipped, so that its Content-Length is the size
-  of the file. The two requests go one after the other, so a server sees
-  one at a time for one file.
+  The result is a map of :head and :get with the facts of a HEAD request
+  and of a request for the first two bytes. The facts of a request that failed
+  are its exception under :error, as failure gives it.
 
   The `opts` are these:
 
-  - :headers of the two requests, e.g. an Origin to learn about CORS
+  - :headers of both requests, e.g. an Origin to learn about CORS
   - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
     takes them
-  - :send, a function that sends a request map in place of send!, as
-    send! does"
+  - :send, the function that sends each request, send! by default"
   ([url]
    (probe! url {}))
   ([url {:keys [headers send] :or {send send!} :as opts}]

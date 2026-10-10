@@ -2,11 +2,6 @@
   "A proxy on your own server for the requests of a web page, since most
   servers don't let a page of another site read their answers.
 
-  On the server, the proxy is a Ring handler for a route of your own, e.g.
-  /proxy?url=https://example.org/feed.xml. In the browser, each request
-  goes through that route, and its answer comes back as if the page had
-  sent the request itself.
-
   The proxy fetches any public URL for whoever can reach it, so put it
   behind your login. Its answers come from other sites but have the
   origin of yours, so it refuses to be opened as a page, and no answer

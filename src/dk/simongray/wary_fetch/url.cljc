@@ -497,27 +497,21 @@
 
 (defn public?
   "Whether the host of the http or https URL `url` is on the public
-  internet. A host on the network of the app or of its device isn't.
+  internet rather than on the network of the app or of its device.
 
-  On the JVM, each address that the name of the host resolves to must be
-  public, and a name that doesn't resolve isn't public. The JVM caches a
-  resolved name for 30 seconds by default, so the request goes to the
-  address that this function checked.
-
-  In Node, send! looks up the name before it asks its :allow-pred, and
-  then each address must be public too. The request goes only to those
-  addresses.
-
-  In a browser, a name can't be looked up. There, the host mustn't be an
-  address that isn't public. A name must have a dot in it, and it mustn't
-  be localhost or a name under .localhost, .local, .internal or
-  .home.arpa."
+  On the JVM each address that the name resolves to must be public, and a
+  name that doesn't resolve isn't. In ClojureScript the name must have a
+  dot in it and mustn't be localhost or a name under .localhost, .local,
+  .internal or .home.arpa. When send! asks in Node, each address of the
+  name must be public too."
   [url]
   #?(:clj  (try
              ;; the host as the client of the JDK reads it, which sends the
              ;; request
              (let [h (some-> url str legal-url URI. .getHost)]
                (boolean (and h
+                             ;; the JVM caches these for 30 seconds, so the
+                             ;; request goes to the addresses checked here
                              (every? public-address?
                                      (InetAddress/getAllByName h)))))
              (catch Exception _

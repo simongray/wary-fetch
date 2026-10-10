@@ -185,27 +185,14 @@
      :cljs (js/Date. ms)))
 
 (defn not-before
-  "The earliest instant to ask again, by the response `headers` that arrived
-  at `at`, with the :max-wait-seconds of `opts`. Nil when the headers name
-  no later time, or forbid a cache.
+  "The earliest instant to ask again, by the response `headers` that
+  arrived at `at`, with the wait capped at the :max-wait-seconds of `opts`.
 
-  The instant is the first of these that the headers give:
-
-  - the Retry-After, in seconds or as a date
-  - the end of the freshness that the max-age of Cache-Control gives,
-    less the Age
-  - the Expires
-
-  A date counts from the Date of the response, so that the clock of the
-  server and a wrong time zone don't matter (RFC 9111, section 4.2.1).
-  Without a Date, a date counts from `at`.
-
-  With :max-wait-seconds, the instant is at most that long after `at`,
-  e.g. so that a server that's set up wrong can't hold back a poller.
-
-  A Retry-After that doesn't read counts as none. The values of all the
-  Cache-Control headers count, joined as RFC 9110, section 5.3, joins
-  them."
+  The instant comes from the first of these that the headers give: the
+  Retry-After, the max-age of Cache-Control less the Age, or the Expires.
+  It's nil when they name no later time or forbid a cache. A date counts
+  from the Date of the response so that a wrong clock on the server
+  doesn't matter (RFC 9111, section 4.2.1)."
   ([headers at]
    (not-before headers at {}))
   ([headers at {:keys [max-wait-seconds] :as opts}]

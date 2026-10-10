@@ -1,22 +1,11 @@
 (ns dk.simongray.wary-fetch.secret
-  "Texts that don't show when they're printed: a secret key, a password,
-  a token.
+  "Texts that print as #<secret> (e.g. a password or a token) so that a log
+  or a REPL doesn't show them.
 
-  The functions pr and str and the pretty printer write a hidden text like
-  this, on both platforms:
-
-      #<secret>
-
-  So a log or a REPL that prints a map with a secret in it doesn't show
-  the secret.
-
-  The reader doesn't read that text. So a map with a hidden text doesn't
-  go to a file as EDN and come back without its secret, since the reading
-  fails.
-
-  This keeps a secret from a print by accident. It doesn't keep it from
-  code that looks for it, since a debugger and the console of a browser
-  show the fields of an object."
+  The reader can't read #<secret>. So a map with a hidden text that goes to
+  a file as EDN fails to read back instead of coming back without its
+  secret. A debugger or a browser's console still shows the text because
+  it shows the fields of an object."
   #?(:clj (:import [java.io Writer])))
 
 (def ^:no-doc shown

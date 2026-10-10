@@ -1,13 +1,13 @@
 (ns dk.simongray.wary-fetch.async
   "Futures on the JVM and promises in ClojureScript behind one set of
-  functions, so that code that waits for answers is written once. The
+  functions so that code that waits for answers is written once. The
   functions take a value, a future or a promise alike."
   (:refer-clojure :exclude [iteration some])
   (:require [clojure.string :as str]))
 
 (defn then
-  "The result of `f` on `x` once `x` is a value: at once when it's one, or
-  when `x`, a future on the JVM or a promise in ClojureScript, has its
+  "The result of `f` on `x` once `x` is a value: at once when it's one or
+  when `x` (a future on the JVM or a promise in ClojureScript) has its
   value."
   [x f]
   #?(:clj  (f (if (future? x) @x x))
@@ -16,12 +16,12 @@
 (declare attempt)
 
 (defn all
-  "The values of `xs`, each a value, a future or a promise, as a vector,
-  or with `f`, the results of `f` on each of `xs`. On the JVM, it gives
-  the vector once every future has its value, and the futures run at
-  once. In ClojureScript, it gives a promise of it.
+  "The values of `xs` (each a value, a future or a promise) as a vector,
+  or the results of `f` on each of them. On the JVM it gives the vector
+  once every future has its value, and the futures run at once. In
+  ClojureScript it gives a promise of it.
 
-  With `f`, every call is under way before any is waited for, e.g.
+  With `f` every call is under way before any is waited for, e.g.
   (all force [(delay (a!)) (delay (b!))]) makes two different calls at
   once."
   ([xs]
@@ -60,14 +60,13 @@
           xs))
 
 (defn attempt
-  "The result of calling `f` as a map of its :value, in a future or a
-  promise. When `f` throws, or in ClojureScript rejects, the map has the
+  "The result of calling `f` as a map of its :value (in a future or a
+  promise). When `f` throws (or in ClojureScript rejects), the map has the
   :error instead.
 
-  On the JVM, each attempt runs on a future of its own, so several run at
-  once. An error counts too, such as the
-  StackOverflowError of deeply nested input, as anything thrown does in
-  ClojureScript."
+  On the JVM each attempt runs on a future of its own, so several run at
+  once. Errors count too (e.g. the StackOverflowError of deeply nested
+  input), as anything thrown does in ClojureScript."
   [f]
   #?(:clj  (future (try {:value (f)} (catch Throwable e {:error e})))
      :cljs (-> (js/Promise.resolve nil)
@@ -76,9 +75,8 @@
                (.catch (fn [e] {:error e})))))
 
 (defn iteration
-  "The values that clojure.core/iteration gives for `step!` and `opts`, as
-  a vector of at most :limit values. On the JVM it gives the vector, and
-  in ClojureScript a promise of it.
+  "The values that clojure.core/iteration gives for `step!` and `opts` as
+  a vector of at most :limit values (or in ClojureScript a promise of it).
 
   The `opts` are the :somef, :vf, :kf and :initk of
   clojure.core/iteration, and :limit. The `step!` function gives a value,

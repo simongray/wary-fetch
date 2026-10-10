@@ -86,6 +86,7 @@ also have these keys:
 
 - `:timeout-seconds`, the limit of the whole exchange, 30 by default
 - `:max-bytes`, the limit of the body, 100 MB by default
+- `:max-redirects`, how many redirects to follow, 5 by default
 - `:allow-pred`, a predicate of the URL and of each redirect
 - `:user-agent`, the User-Agent, unless the headers name one
 - `:as :bytes`, for a body of bytes, e.g. of an image

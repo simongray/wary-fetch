@@ -107,6 +107,11 @@
                         (http/send! {:url (str base "/loop")})))
                (.then (fn [response]
                         (is (= [302 5] [(:status response) (count (:redirects response))]) "five redirects at most")
+                        (reset! seen [])
+                        (http/send! {:url (str base "/for-now") :max-redirects 0})))
+               (.then (fn [response]
+                        (is (= [302 nil] [(:status response) (:redirects response)]))
+                        (is (= 1 (count @seen)) "none with :max-redirects 0")
                         (failure-type {:url        (str base "/for-now")
                                        :allow-pred (fn [u] (not (str/ends-with? u "/feed")))})))
                (.then (fn [type]

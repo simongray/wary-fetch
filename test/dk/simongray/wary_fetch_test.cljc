@@ -326,7 +326,12 @@
                (is (= ["POST" "GET"] (map #(nth % 2) @seen))))
              (testing "five redirects at most, and then the redirect itself"
                (is (= 302 (:status (call "/loop"))))
-               (is (= 6 (count @seen))))))))))
+               (is (= 6 (count @seen))))
+             (testing "as many as :max-redirects says"
+               (is (= [302 nil] ((juxt :status :redirects) (call "/for-now" :max-redirects 0))))
+               (is (= 1 (count @seen)))
+               (is (= 302 (:status (call "/then-for-now" :max-redirects 1))))
+               (is (= 2 (count @seen))))))))))
 
 #?(:clj
    (deftest a-body-sent-too-slowly

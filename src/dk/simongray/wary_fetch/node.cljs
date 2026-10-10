@@ -210,9 +210,10 @@
                 (.then #(open! request % deadline (fn [] (limits/late url))))
                 (.then (fn [{:keys [status headers] :as opened}]
                          (let [location (headers/header headers "location")
+                               limit    (:max-redirects request
+                                                        redirect/limit)
                                target   (when (and (redirect/statuses status)
-                                                   (< (count chain)
-                                                      redirect/limit))
+                                                   (< (count chain) limit))
                                           (redirect/target url location))]
                            (if-not target
                              [opened chain request]

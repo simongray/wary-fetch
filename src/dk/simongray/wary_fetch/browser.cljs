@@ -87,13 +87,16 @@
 (defn send!
   "A promise of the response to `request`, sent with fetch within
   `timeout-seconds`, unless `allow-pred` refuses its URL."
-  [{:keys [method url headers body] :as request} timeout-seconds allow-pred]
+  [{:keys [method url headers body max-redirects] :as request}
+   timeout-seconds
+   allow-pred]
   (if-not (allow-pred url)
     (js/Promise.reject (limits/refusal url))
     (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
           init   (cond-> {:method  (str/upper-case (name (or method :get)))
                           :headers headers
                           :signal  signal}
-                   (some? body) (assoc :body body))]
+                   (some? body)        (assoc :body body)
+                   (= 0 max-redirects) (assoc :redirect "manual"))]
       (-> (js/fetch url (clj->js init))
           (.then #(answer % request))))))

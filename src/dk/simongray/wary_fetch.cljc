@@ -101,17 +101,20 @@
   - :allow-pred, a predicate of each URL, e.g. url/public?
   - :user-agent, the User-Agent outside a browser unless the :headers
     name one
+  - :max-redirects, how many redirects to follow (5 by default, and 0 for
+    none)
 
   The response is a map of :status, the final :url, :headers and :body.
   The body has gzip undone and text decoded by its charset. A 206 also
   has the :content-range as a map of :start, :end and :total. In a
   browser, :filtered? marks a response whose headers CORS hides.
 
-  Outside a browser it follows up to five redirects and asks :allow-pred
+  Outside a browser it follows the redirects itself and asks :allow-pred
   about each. It never follows one from https to http, and credentials
   stay behind when a redirect leaves the origin. The response then lists
   the :redirects and has a :permanent-url if the first ones were
-  permanent.
+  permanent. A browser follows its own, unless :max-redirects is 0, which
+  gives a redirect as a response with the status 0.
 
   It throws ::timeout or ::too-large past a limit and ::refused when
   :allow-pred refuses a URL."
@@ -142,12 +145,12 @@
 (def ^:no-doc option-keys
   "The keys of a request that say how it's sent, which the functions that
   send take from their options."
-  [:timeout-seconds :max-bytes :allow-pred :user-agent])
+  [:timeout-seconds :max-bytes :allow-pred :user-agent :max-redirects])
 
 (defn with-options
-  "The `request` with the :timeout-seconds, :max-bytes, :allow-pred and
-  :user-agent that `opts` give, for a function that sends with the options
-  of send!."
+  "The `request` with the :timeout-seconds, :max-bytes, :allow-pred,
+  :user-agent and :max-redirects that `opts` give, for a function that
+  sends with the options of send!."
   [request opts]
   (into request (remove (comp nil? val)) (select-keys opts option-keys)))
 
@@ -173,7 +176,7 @@
   "Send the `request` with `send`, a function such as send!, and give a
   map of the response as the :value, or of the exception as the :error
   where `send` throws. The `opts` are the :timeout-seconds, :max-bytes,
-  :allow-pred and :user-agent to put in the request.
+  :allow-pred, :user-agent and :max-redirects to put in the request.
 
   The map comes in a future on the JVM and in a promise in ClojureScript,
   so several requests can be under way at once."
@@ -223,8 +226,8 @@
     no body.
   - :credentials, as authorization takes them
   - :accept, the Accept header, */* by default
-  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
-    takes them
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
+    :user-agent, as send! takes them
   - :max-wait-seconds, as headers/not-before takes it
   - :send, the function that sends the request, send! by default"
   ([url]
@@ -317,8 +320,8 @@
   The `opts` are these:
 
   - :headers of the requests
-  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
-    takes them
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
+    :user-agent, as send! takes them
   - :send, the function that sends each request, send! by default"
   ([url]
    (fetcher url {}))
@@ -411,8 +414,8 @@
   The `opts` are these:
 
   - :headers of both requests, e.g. an Origin to learn about CORS
-  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
-    takes them
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
+    :user-agent, as send! takes them
   - :send, the function that sends each request, send! by default"
   ([url]
    (probe! url {}))

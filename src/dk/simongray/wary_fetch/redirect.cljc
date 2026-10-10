@@ -10,7 +10,8 @@
   #{301 302 303 307 308})
 
 (def limit
-  "How many redirects a client follows at most."
+  "How many redirects a client follows at most, unless the :max-redirects
+  of a request says otherwise."
   5)
 
 (def credential-headers

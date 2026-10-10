@@ -181,8 +181,9 @@
             location (-> (.headers response)
                          (.firstValue "location")
                          (.orElse nil))
+            limit    (:max-redirects request redirect/limit)
             target   (when (and (redirect/statuses status)
-                                (< (count chain) redirect/limit))
+                                (< (count chain) limit))
                        (some-> (redirect/target url location) url/legal-url))]
         (if-not target
           [response chain]

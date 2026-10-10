@@ -3,32 +3,21 @@ wary-fetch
 
 This is a Clojure and ClojureScript library for fetching URLs that
 strangers give you, e.g. a feed URL that a user types in, or a link in a
-document you fetched. Requests and responses are plain maps, sent with
-java.net.http on the JVM and with fetch in JavaScript, with guards on
-where a request goes and on what comes back.
+document you fetched. Requests and responses are plain maps.
 
-- **Only the public internet, if you ask.** With `url/public?` as the
-  `:allow-pred`, a request for localhost, the local network or a cloud
-  metadata address throws instead of going out. On the JVM and in Node,
-  every address that a name resolves to is checked, and so is every
-  redirect.
-- **Limits on every exchange.** A request has a time limit and a limit on
-  the size of its body, counted after gzip is undone, so neither a slow
-  server nor a gzip bomb can hold you up.
-- **Careful redirects.** On the JVM, a redirect never goes from https to
-  http, and credentials stay behind when a redirect leaves the origin.
-  The response says where the URL has moved for good.
-- **Conditional requests.** A request can carry the ETag and
-  Last-Modified of the last response, and the Retry-After and
-  Cache-Control headers tell you when to ask again.
-- **Secrets that don't print.** Passwords and tokens, and the
-  Authorization header made from them, print as `#<secret>`, so a logged
-  request doesn't leak them.
-- **A proxy for web pages.** A Ring handler and a matching sender let a
-  page fetch from sites that don't allow it, through your own server.
+- **Only the public internet, if you ask.** A stranger's URL can't reach
+  your own machine, your local network or your cloud's metadata service,
+  not even by a redirect.
+- **Limits on every exchange.** Neither a slow server nor a gzip bomb can
+  hold you up.
+- **Secrets that don't leak.** Passwords and tokens stay out of your
+  logs, and they don't follow a redirect to another site.
+- **Polling without waste.** A document that hasn't changed costs next
+  to nothing to check, and the response says when to check again.
 
-The same code runs on the JVM, in Node and in the browser. There are no
-dependencies but Clojure.
+The same code runs on the JVM, in Node and in the browser, where a proxy
+on your own server lets a page fetch from sites that don't allow it.
+There are no dependencies but Clojure.
 
 > This library was spun out of [podcast-clj](https://github.com/simongray/podcast-clj),
 > a library for making podcast software, where it fetches feeds, media

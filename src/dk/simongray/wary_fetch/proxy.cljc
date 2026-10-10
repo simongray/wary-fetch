@@ -15,6 +15,7 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.bytes :as bytes]
+            [dk.simongray.wary-fetch.headers :as headers]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def defaults
@@ -149,7 +150,7 @@
          {:strs [url as]} (target ring-request)
          headers          (header-names ring-request)
          [asked :as asks] (when (contains? forward "range")
-                            (http/byte-ranges (get headers "range")))
+                            (headers/byte-ranges (get headers "range")))
          forwarded        (select-keys headers (disj forward "range"))]
      (when (url/web-url? url)
        (cond-> (http/with-options {:method  request-method
@@ -172,11 +173,11 @@
   ([{:keys [status url permanent-url headers body] :as response}
     {:keys [expose] :or {expose (:expose defaults)} :as opts}]
    (let [type         (when (contains? expose "content-type")
-                        (http/header headers "content-type"))
-         text         (when (string? body) (http/media-type type))
+                        (headers/header headers "content-type"))
+         text         (when (string? body) (headers/media-type type))
          content-type (if text (str text "; charset=utf-8") type)
          exposed      (for [h (disj expose "content-type")
-                            :let [v (http/joined headers h)]
+                            :let [v (headers/joined headers h)]
                             :when v]
                         [h v])]
      {:status  status
@@ -258,10 +259,11 @@
   send the request, this throws the exception that a direct request would
   have thrown, with the same :type."
   [request {:keys [headers] :as response}]
-  (if-let [e (some->> (http/joined headers "proxy-status") (failure request))]
+  (if-let [e (some->> (headers/joined headers "proxy-status")
+                      (failure request))]
     (throw e)
-    (let [moved (http/header headers permanent-header)
-          url   (or (http/header headers "content-location")
+    (let [moved (headers/header headers permanent-header)
+          url   (or (headers/header headers "content-location")
                     (:url request))]
       (cond-> (assoc response :url url)
         moved (assoc :permanent-url moved)))))

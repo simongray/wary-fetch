@@ -140,17 +140,23 @@ When to ask again
 
 A response from `http/fetch!` has the `:not-before` instant when its
 Retry-After or Cache-Control headers say how long to wait. The
-`http/not-before` function reads the same headers on their own:
+`headers/not-before` function reads the same headers on their own:
 
 ```clojure
-(http/not-before {"cache-control" "max-age=600"}
-                 #inst "2026-10-10T12:00:00Z")
+(require '[dk.simongray.wary-fetch.headers :as headers])
+
+(headers/not-before {"cache-control" "max-age=600"}
+                    #inst "2026-10-10T12:00:00Z")
 ;; => #inst "2026-10-10T12:10:00.000-00:00"
 ```
 
 The wait is as long as the server says. To poll a server that might be
 set up wrong, cap it with the option `:max-wait-seconds`, e.g. 3600 for
 an hour.
+
+The `dk.simongray.wary-fetch.headers` namespace reads the other headers
+of a response too, e.g. `headers/links` reads a Link header and
+`headers/media-type` a Content-Type.
 
 Media files
 -----------
@@ -234,8 +240,8 @@ Principles
   specs it implements, and cites their sections.
 - **Plain data.** Requests and responses are maps, so any HTTP client can
   send a request, and you can send one with a function of your own.
-- **One codebase.** Apart from the client of Node, the library is
-  written in `.cljc`, with no dependencies but Clojure, and it behaves
+- **One codebase.** Apart from the client of each platform, the library
+  is written in `.cljc`, with no dependencies but Clojure, and it behaves
   the same on both platforms wherever JavaScript allows it.
 
 Development
@@ -246,6 +252,11 @@ clojure -X:test               # the tests on the JVM
 npm install                   # once, for the Node tests
 clojure -M:cljs compile test  # the tests in Node
 ```
+
+The public namespaces are the root, `headers`, `url`, `proxy`, `async`
+and `secret`. The others are internal: `jvm`, `node` and `browser` are
+the clients of each platform, `redirect` and `limits` hold the rules
+that the clients share, and `date`, `encoding` and `bytes` are helpers.
 
 License
 -------

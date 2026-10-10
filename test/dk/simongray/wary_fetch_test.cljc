@@ -1,9 +1,12 @@
 (ns dk.simongray.wary-fetch-test
-  "The HTTP layer: the pure parts on both platforms, and on the JVM URL
-  encoding, body decoding, and fetching from servers on localhost."
+  "Sending: requests and their credentials, fetch!, the fetcher, probe!
+  and the facts of an answer, on both platforms, and on the JVM against
+  servers on localhost."
   (:require [clojure.test :refer [deftest is testing #?(:cljs async)]]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
+            #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
+            [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run #?(:clj with-file-server)]]
             [dk.simongray.wary-fetch.url :as url])
@@ -12,11 +15,6 @@
                    [java.net InetSocketAddress]
                    [java.security MessageDigest]
                    [java.util.zip GZIPOutputStream])))
-
-(deftest byte-ranges
-  (is (= {:start 0 :end 1023 :total 146515} (http/content-range "bytes 0-1023/146515")))
-  (is (= {:start 5 :end 9 :total nil} (http/content-range "bytes 5-9/*")))
-  (is (nil? (http/content-range "bytes */1000")) "an unsatisfiable range names none"))
 
 (deftest facts-of-an-answer
   (is (= {:status 206 :url "https://b/e.mp3" :type "audio/mpeg" :length 2 :range {:start 0 :end 1 :total 1000}
@@ -37,8 +35,7 @@
   (is (= [200 "text/vtt" 12] ((juxt :status :type :length)
                               (http/facts {:status 200 :headers {"content-type" "text/vtt" "content-length" "12"}})))
       "headers as strings, as an app's own client can give them")
-  (is (nil? (:length (http/facts {:status 200 :headers {"content-length" ["-1"]}}))))
-  (is (nil? (http/media-type " ")) "no type"))
+  (is (nil? (:length (http/facts {:status 200 :headers {"content-length" ["-1"]}})))))
 
 #?(:cljs
    (deftest fetching-by-range-with-fetch
@@ -97,7 +94,7 @@
                       (is (= [200 "audio/mpeg" 1000] ((juxt :status :type :length) head)))
                       (is (= [206 {:start 0 :end 1 :total 1000}] ((juxt :status :range) get)))
                       (is (= #{["HEAD" nil] ["GET" "bytes=0-1"]} (set @requests)))
-                      (is (= (if http/browser? #{nil} #{http/user-agent}) @agents)
+                      (is (= (if browser/available? #{nil} #{http/user-agent}) @agents)
                           "each request names the library, unless a browser sends its own User-Agent")))
              (.catch (fn [e] (is false (str "rejected: " e))))
              (.finally (fn []
@@ -135,8 +132,8 @@
     (is (= (http/revealed request) (http/revealed (http/revealed request))))
     (is (= {:url "https://example.org/x"} (http/revealed {:url "https://example.org/x"})) "a request without headers and a body")
     (testing "a redirect to another origin leaves the hidden headers behind too"
-      (is (= {"Accept" "*/*"} (:headers (http/redirected request 307 "https://other.example/x"))))
-      (is (= (:headers request) (:headers (http/redirected request 307 "https://example.org/y")))))))
+      (is (= {"Accept" "*/*"} (:headers (redirect/next-request request 307 "https://other.example/x"))))
+      (is (= (:headers request) (:headers (redirect/next-request request 307 "https://example.org/y")))))))
 
 (deftest credentials-in-a-url
   (is (= ["https://host.example:8443/feed.xml?x=1" {:username "simon@example.org" :password (secret/hide "p p")}]
@@ -177,47 +174,6 @@
                         (is (= [304 "\"v1\""] ((juxt :status :etag) response)))
                         (is (inst? (:not-before response))))))))
 
-(deftest when-to-ask-again
-  (let [at #inst "2026-09-27T12:00:00Z"]
-    (testing "Retry-After, in seconds or as a date"
-      (is (= #inst "2026-09-27T12:02:00Z" (http/not-before {"retry-after" ["120"]} at)))
-      (is (= #inst "2026-09-27T12:40:00Z" (http/not-before {"retry-after" "Sun, 27 Sep 2026 12:40:00 GMT"} at))))
-    (testing "the three forms of a date of HTTP"
-      (doseq [date ["Sun, 27 Sep 2026 12:40:00 GMT" "Sunday, 27-Sep-26 12:40:00 GMT" "Sun Sep 27 12:40:00 2026"]]
-        (is (= #inst "2026-09-27T12:40:00Z" (http/not-before {"retry-after" [date]} at)) date))
-      (is (= #inst "2026-09-06T12:40:00Z" (http/not-before {"retry-after" ["Sun Sep  6 12:40:00 2026"]} #inst "2026-09-06T12:00:00Z"))
-          "a day of one digit has a space before it"))
-    (testing "the freshness of Cache-Control, less the age, else Expires"
-      (is (= #inst "2026-09-27T12:08:20Z" (http/not-before {"cache-control" ["public, max-age=600"] "age" ["100"]} at)))
-      (is (= #inst "2026-09-27T12:30:00Z" (http/not-before {"expires" ["Sun, 27 Sep 2026 12:30:00 GMT"]} at))))
-    (testing "a date counts from the Date of the response, whatever the clock or the zone of the server"
-      (let [two-hours-ahead {"date" ["Sun, 27 Sep 2026 14:00:00 GMT"]}]
-        (is (= #inst "2026-09-27T12:30:00Z" (http/not-before (assoc two-hours-ahead "expires" ["Sun, 27 Sep 2026 14:30:00 GMT"]) at)))
-        (is (= #inst "2026-09-27T12:20:00Z" (http/not-before (assoc two-hours-ahead "retry-after" ["Sun, 27 Sep 2026 14:20:00 GMT"]) at)))
-        (is (= #inst "2026-09-27T12:20:00Z"
-               (http/not-before (assoc two-hours-ahead "expires" ["Sun, 27 Sep 2026 14:30:00 GMT"] "age" ["600"]) at))
-            "less the age")))
-    (testing "a Retry-After that does not read counts as none"
-      (is (= #inst "2026-09-27T12:10:00Z" (http/not-before {"retry-after" ["soon"] "cache-control" ["max-age=600"]} at)))
-      (is (nil? (http/not-before {"retry-after" ["soon"]} at))))
-    (testing "the values of every Cache-Control header"
-      (is (= #inst "2026-09-27T12:10:00Z" (http/not-before {"cache-control" ["public" "max-age=600"]} at)))
-      (is (nil? (http/not-before {"cache-control" ["max-age=600" "no-store"]} at))))
-    (testing "nothing when the headers forbid a cache or name no later time"
-      (is (nil? (http/not-before {"cache-control" ["no-cache, max-age=600"]} at)))
-      (is (nil? (http/not-before {"cache-control" ["s-maxage=600"]} at)) "a shared cache's age is not ours")
-      (is (nil? (http/not-before {"expires" ["Sun, 27 Sep 2026 11:30:00 GMT"]} at)))
-      (is (nil? (http/not-before {} at))))
-    (is (= #inst "2026-10-09T01:46:39Z" (http/not-before {"retry-after" ["999999"]} at))
-        "as late as the server says")
-    (is (= #inst "2026-09-27T13:00:00Z" (http/not-before {"retry-after" ["999999"]} at {:max-wait-seconds 3600}))
-        "or at most the :max-wait-seconds of the options")
-    (is (= #inst "2026-09-27T13:00:00Z"
-           (http/not-before {"cache-control" ["public, max-age=424481"] "age" ["180318"]} at {:max-wait-seconds 3600})))
-    (testing "a date with an offset, and one of a day that does not exist"
-      (is (= #inst "2026-09-27T12:40:00Z" (http/not-before {"retry-after" ["Sun, 27 Sep 2026 14:40:00 +0200"]} at)))
-      (is (nil? (http/not-before {"retry-after" ["Sun, 31 Sep 2026 12:40:00 GMT"]} at))))))
-
 #?(:clj
    (defn- gzip
      ^bytes [^bytes body]
@@ -225,27 +181,6 @@
        (with-open [z (GZIPOutputStream. out)]
          (.write z body))
        (.toByteArray out))))
-
-#?(:clj
-   (deftest decoding-bodies
-     (let [xml   "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><rss><channel><title>Blåbær</title></channel></rss>"
-           latin (.getBytes xml "ISO-8859-1")]
-       (testing "the XML declaration names the charset when the headers do not"
-         (is (= xml (http/decode {} latin))))
-       (testing "the Content-Type header wins over the declaration"
-         (is (not= xml (http/decode {"content-type" ["text/xml; charset=UTF-8"]} latin))))
-       (testing "a byte order mark wins over the header, as RFC 7303 has it"
-         (let [utf-16 (.getBytes (str "﻿" xml) "UTF-16LE")
-               utf-8  (.getBytes (str "﻿" xml) "UTF-8")]
-           (is (= xml (http/decode {"content-type" ["text/xml; charset=ISO-8859-1"]} utf-16)))
-           (is (= xml (http/decode {"content-type" ["text/xml; charset=ISO-8859-1"]} utf-8)))
-           (is (= xml (http/decode {} (.getBytes (str "﻿" xml) "UTF-16BE"))))))
-       (testing "gzip is undone before decoding, however the header spells it"
-         (is (= xml (http/decode {"content-encoding" ["gzip"]} (gzip latin))))
-         (is (= xml (http/decode {"content-encoding" ["GZIP"]} (gzip latin))))
-         (is (= xml (http/decode {"content-encoding" ["x-gzip"]} (gzip latin)))))
-       (testing "an unknown charset falls back to UTF-8"
-         (is (= "<a>x</a>" (http/decode {"content-type" ["text/xml; charset=nonsense"]} (.getBytes "<a>x</a>" "UTF-8"))))))))
 
 #?(:clj
    (defn- with-server
@@ -519,42 +454,6 @@
                       (fn [{:keys [error]}]
                         (is (= {:type ::http/failed :status 404 :url url} (ex-data error))
                             "a call throws, with the type and the status"))))))
-
-(deftest the-request-after-a-redirect
-  (let [post {:method  :post
-              :url     "https://a.example/x"
-              :headers {"Authorization" "Basic x" "Cookie" "c=1" "Accept" "*/*"}
-              :body    "{}"}
-        there "https://a.example/y"]
-    (testing "a 303, and a 301 or 302 to a POST, turn into a GET without a body"
-      (is (= {:method :get :url there :headers (:headers post) :body nil} (http/redirected post 303 there)))
-      (is (= [:get nil] ((juxt :method :body) (http/redirected post 301 there))))
-      (is (= [:get nil] ((juxt :method :body) (http/redirected post 302 there))))
-      (is (= [:put "{}"] ((juxt :method :body) (http/redirected (assoc post :method :put) 302 there)))))
-    (testing "a 307 and a 308 keep the method and the body"
-      (is (= [:post "{}"] ((juxt :method :body) (http/redirected post 307 there))))
-      (is (= [:post "{}"] ((juxt :method :body) (http/redirected post 308 there)))))
-    (is (= :head (:method (http/redirected (assoc post :method :head) 303 there))) "a HEAD stays a HEAD")
-    (testing "credentials stay behind when the redirect leaves the origin"
-      (is (= {"Accept" "*/*"} (:headers (http/redirected post 307 "https://b.example/x"))))
-      (is (= {"Accept" "*/*"} (:headers (http/redirected post 307 "https://a.example:8443/x"))) "another port")
-      (is (= {"Accept" "*/*"} (:headers (http/redirected post 307 "http://a.example/x"))) "another scheme")
-      (is (= (:headers post) (:headers (http/redirected post 307 "https://A.example:443/x")))
-          "the same origin, written another way"))
-    (is (= 5 (:timeout-seconds (http/redirected (assoc post :timeout-seconds 5) 307 there)))
-        "the rest of the request stays")))
-
-(deftest links-of-a-header
-  (is (= [{:href "https://hub.example.com/" :rel "hub"} {:href "http://example.com/feed" :rel "self"}]
-         (http/links {"link" "<https://hub.example.com/>; rel=\"hub\", <http://example.com/feed>; rel=\"self\""})))
-  (is (= [{:href "https://hub.example.com/?a=1,2" :rel "hub" :title "A, B; C"}
-          {:href "/feed.xml" :rel "self alternate" :type "application/rss+xml"}]
-         (http/links {"link" ["<https://hub.example.com/?a=1,2>; rel=hub; title=\"A, B; C\"; REL=other"
-                              "</feed.xml>;rel=\"self alternate\";type=application/rss+xml"]}))
-      "several headers, a comma and a semicolon inside a value, and the first value of a parameter")
-  (is (= [{:href "x"}] (http/links {"link" "garbage, <>; rel, <x>; rel"})) "what is no link is left out")
-  (is (= [] (http/links {})))
-  (is (= [] (http/links {"link" (apply str (repeat 20000 "<"))})) "a long header of a stranger"))
 
 #?(:clj
    (deftest refusing-hosts

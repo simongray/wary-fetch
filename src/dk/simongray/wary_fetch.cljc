@@ -1,5 +1,5 @@
 (ns dk.simongray.wary-fetch
-  "Requests as maps, and the client that sends them.
+  "Requests as maps, and the clients that send them.
 
   On the JVM, the client is java.net.http, and in Node it's node:http.
   Either follows redirects, accepts gzip, makes conditional requests, and
@@ -14,32 +14,22 @@
   A request moves no more bytes than its purpose needs."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.async :as async]
+            #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
             [dk.simongray.wary-fetch.bytes :as bytes]
-            [dk.simongray.wary-fetch.date :as date]
-            [dk.simongray.wary-fetch.encoding :as encoding]
+            [dk.simongray.wary-fetch.headers :as headers]
+            #?(:clj [dk.simongray.wary-fetch.jvm :as jvm])
+            [dk.simongray.wary-fetch.limits :as limits]
             #?(:cljs [dk.simongray.wary-fetch.node :as node])
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.url :as url])
-  #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream
-                            InputStream IOException]
-                   [java.net URI]
-                   [java.net.http HttpClient HttpClient$Redirect HttpRequest
-                                  HttpRequest$Builder HttpRequest$BodyPublishers
-                                  HttpResponse HttpResponse$BodyHandlers
-                                  HttpTimeoutException]
-                   [java.security MessageDigest]
-                   [java.time Duration]
-                   [java.util.concurrent ScheduledFuture
-                                         ScheduledThreadPoolExecutor
-                                         ThreadFactory TimeUnit]
-                   [java.util.zip GZIPInputStream])))
+  #?(:clj (:import [java.net.http HttpTimeoutException])))
 
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
   "wary-fetch (+https://github.com/simongray/wary-fetch)")
 
-(defn ^:no-doc base64
+(defn- base64
   "The UTF-8 bytes of `s` in base64."
   [s]
   (bytes/base64 (bytes/encode s)))
@@ -83,523 +73,11 @@
     headers                   (update :headers update-vals secret/reveal)
     (contains? request :body) (update :body secret/reveal)))
 
-(defn header
-  "The first value of `header-name` in the response headers map `headers`,
-  whose values are strings or vectors of them."
-  [headers header-name]
-  (let [v (get headers (str/lower-case header-name))]
-    (if (string? v) v (first v))))
-
-(defn ^:no-doc joined
-  "All the values of `header-name` in the response headers map `headers`,
-  joined by commas as fetch joins them, or nil for none."
-  [headers header-name]
-  (let [v (get headers (str/lower-case header-name))]
-    (if (string? v)
-      v
-      (some->> (seq v) (str/join ", ")))))
-
-(defn- link-of
-  "The link that the `tokens` of one value of a Link header give, the
-  target and then the parameters, each after a semicolon. Nil when the
-  value starts with no target."
-  [[target & params :as tokens]]
-  (when (and target
-             (re-find #"^<\s*[^\s>]" target))
-    (reduce (fn [link [k eq v]]
-              (let [k (keyword (str/lower-case k))]
-                (cond-> link
-                  (and (= "=" eq)
-                       v
-                       (not (contains? link k)))
-                  (assoc k (str/replace v #"^\"|\"$" "")))))
-            {:href (str/trim (subs target 1 (dec (count target))))}
-            (remove #(= ";" (first %)) (partition-by #(= ";" %) params)))))
-
-(defn links
-  "The links of the Link header in the response `headers`, as section 3
-  of RFC 8288 defines them.
-
-  Each link is a map with its target as :href, and with its parameters
-  by name, e.g. :rel and :type. The links are in the order of the header.
-  The first value of a parameter counts, and a target can be relative to
-  the URL of the response."
-  [headers]
-  (->> (re-seq #"<[^>]*>|\"[^\"]*\"|[;,=]|[^\s;,=<\"]+"
-               (str (joined headers "link")))
-       (partition-by #(= "," %))
-       (keep link-of)
-       vec))
-
-(defn ^:no-doc seconds
-  "The whole number of seconds that the header value `s` gives, or nil
-  when it gives none."
-  [s]
-  (some->> s str/trim (re-matches #"\d{1,10}") parse-long))
-
-(defn ^:no-doc ours
-  "The time `t` on the clock of the server, as a time on the clock of the
-  client. The response that `arrived` names `served` as the time that the
-  server sent it. Without `served`, the clocks count as one."
-  [t arrived served]
-  (if served
-    (+ arrived (- t served))
-    t))
-
-;; RFC 9110, section 10.2.3
-(defn- retry-after
-  "When the Retry-After of `headers` says to ask again, in epoch
-  milliseconds, by the times that the response `arrived` and was `served`.
-  Nil when it gives no time."
-  [headers arrived served]
-  (let [retry (header headers "retry-after")]
-    (or (some->> (seconds retry) (* 1000) (+ arrived))
-        (some-> (date/epoch-ms retry) (ours arrived served)))))
-
-;; RFC 9111, section 4.2.1
-(defn- fresh-until
-  "When the freshness of the response with `headers` ends, in epoch
-  milliseconds, by the times that the response `arrived` and was `served`.
-  Nil when the headers forbid a cache or name no time.
-
-  The freshness ends at the max-age less the Age, or else at the Expires."
-  [headers arrived served]
-  (let [age     (* 1000 (or (seconds (header headers "age")) 0))
-        cache   (some-> (joined headers "cache-control") str/lower-case)
-        max-age (some->> cache
-                         (re-find #"max-age=(\d{1,10})")
-                         second
-                         parse-long)
-        expires (date/epoch-ms (header headers "expires"))]
-    (when-not (some->> cache (re-find #"no-cache|no-store"))
-      (if max-age
-        (- (+ arrived (* 1000 max-age)) age)
-        (some-> expires
-                (ours arrived served)
-                (- (if served age 0)))))))
-
-(defn- instant
-  "The instant of the epoch milliseconds `ms`, as the platform keeps it."
-  [ms]
-  #?(:clj  (java.util.Date. (long ms))
-     :cljs (js/Date. ms)))
-
-(defn- now
-  "The instant now, by the clock of the platform."
-  []
-  #?(:clj  (java.util.Date.)
-     :cljs (js/Date.)))
-
-(defn not-before
-  "The earliest instant to ask again, by the response `headers` that arrived
-  at `at`, with the :max-wait-seconds of `opts`. Nil when the headers name
-  no later time, or forbid a cache.
-
-  The instant is the first of these that the headers give:
-
-  - the Retry-After, in seconds or as a date
-  - the end of the freshness that the max-age of Cache-Control gives,
-    less the Age
-  - the Expires
-
-  A date counts from the Date of the response, so that the clock of the
-  server and a wrong time zone don't matter (RFC 9111, section 4.2.1).
-  Without a Date, a date counts from `at`.
-
-  With :max-wait-seconds, the instant is at most that long after `at`,
-  e.g. so that a server that's set up wrong can't hold back a poller.
-
-  The `headers` map lower-case names to a value or a vector of values. A
-  Retry-After that doesn't read counts as none. The values of all the
-  Cache-Control headers count, joined as RFC 9110, section 5.3, joins
-  them."
-  ([headers at]
-   (not-before headers at {}))
-  ([headers at {:keys [max-wait-seconds] :as opts}]
-   (let [arrived (inst-ms at)
-         served  (date/epoch-ms (header headers "date"))
-         until   (or (retry-after headers arrived served)
-                     (fresh-until headers arrived served))]
-     (when (and until (> until arrived))
-       (instant (cond-> until
-                  max-wait-seconds (min (+ arrived
-                                           (* 1000 max-wait-seconds)))))))))
-
-#?(:clj
-   (defonce ^{:no-doc true
-              :doc    "The shared HTTP client, built on first use, with a
-  connect timeout of 15 seconds. Redirects are left to send!, which
-  follows them."}
-     client
-     (delay (-> (HttpClient/newBuilder)
-                (.followRedirects HttpClient$Redirect/NEVER)
-                (.connectTimeout (Duration/ofSeconds 15))
-                (.build)))))
-
-;; RFC 9110, section 8.4.1.3: x-gzip is gzip
-(defn ^:no-doc gzipped?
-  "Whether the response with `headers` says that its body is gzipped."
-  [headers]
-  (let [coding (some-> (header headers "content-encoding")
-                       str/trim
-                       str/lower-case)]
-    (contains? #{"gzip" "x-gzip"} coding)))
-
-#?(:clj
-   (defn ^:no-doc headers-of
-     "The headers of `response`, as a map from lower-case names to vectors
-     of values."
-     [^HttpResponse response]
-     (into {} (map (fn [[k v]] [(str/lower-case k) (vec v)]))
-           (.map (.headers response)))))
-
-(def ^:no-doc default-max-bytes
-  "How much of a response body is read at most, unless the request sets
-  another limit: 100 MB."
-  (* 100 1024 1024))
-
-(defn ^:no-doc too-large
-  "The exception of a response body from `url` that holds more than
-  `max-bytes`."
-  [url max-bytes]
-  (ex-info (str "Response body exceeds " max-bytes " bytes: " url)
-           {:type ::too-large :url url :max-bytes max-bytes}))
-
-#?(:clj
-   (defn ^:no-doc pump
-     "Read `in` from `url` to its end in pieces, give each piece to `f`, and
-     throw ::too-large once more than `max-bytes` have arrived.
-
-     The `f` takes the buffer and the length of the piece. With nil
-     `max-bytes`, it reads everything."
-     [^InputStream in max-bytes url f]
-     (let [buffer (byte-array 65536)]
-       (loop [total 0]
-         (let [n (.read in buffer)]
-           (when-not (neg? n)
-             (let [total (+ total n)]
-               (when (and max-bytes (> total max-bytes))
-                 (throw (too-large url max-bytes)))
-               (f buffer n)
-               (recur total))))))))
-
-#?(:clj
-   (defn ^:no-doc read-bounded
-     "The bytes of `in` from `url`, read to its end within `max-bytes`."
-     ^bytes [^InputStream in max-bytes url]
-     (let [out (ByteArrayOutputStream.)]
-       (pump in max-bytes url (fn [^bytes buffer n]
-                                (.write out buffer 0 (int n))))
-       (.toByteArray out))))
-
-#?(:clj
-   (defonce ^{:no-doc true
-              :doc    "The daemon thread that closes the body of a response
-  still being read when its time is up, built on first use."}
-     watchdog
-     (delay (doto (ScheduledThreadPoolExecutor.
-                   1 (reify ThreadFactory
-                       (newThread [_ runnable]
-                         (doto (Thread. runnable "wary-fetch watchdog")
-                           (.setDaemon true)))))
-              (.setRemoveOnCancelPolicy true)))))
-
-#?(:clj
-   (defn ^:no-doc within
-     "The result of `f`, which reads `in` from `url`, but only until the
-     instant `deadline` in epoch milliseconds.
-
-     At the deadline, the stream is closed and ::timeout thrown, so that a
-     server that sends its body slowly holds no thread for longer."
-     [^InputStream in deadline url f]
-     (let [late?   (atom false)
-           wait-ms (long (max 0 (- deadline (System/currentTimeMillis))))
-           task    (.schedule ^ScheduledThreadPoolExecutor @watchdog
-                              ^Runnable (fn [] (reset! late? true) (.close in))
-                              wait-ms
-                              TimeUnit/MILLISECONDS)
-           late    #(ex-info (str "The response did not arrive in time: " url)
-                             {:type ::timeout :url url})]
-       (try
-         (let [result (f)]
-           ;; a stream closed under a read can end as if the body had ended
-           (if @late? (throw (late)) result))
-         (catch IOException e
-           (throw (if @late? (late) e)))
-         (finally
-           (.cancel ^ScheduledFuture task false))))))
-
-#?(:clj
-   (defn- read-within
-     "The bytes of `in` from `url` within `max-bytes`, but only until the
-     `deadline`."
-     ^bytes [^InputStream in deadline max-bytes url]
-     (within in deadline url #(read-bounded in max-bytes url))))
-
-#?(:clj
-   (defn- gunzip
-     "The gzipped `body` from `url` inflated, with at most `max-bytes` of the
-     result read."
-     ^bytes [^bytes body max-bytes url]
-     (with-open [in (GZIPInputStream. (ByteArrayInputStream. body))]
-       (read-bounded in max-bytes url))))
-
-(defn- charset
-  "The charset that the Content-Type of the response `headers` names, or
-  nil."
-  [headers]
-  (some->> (header headers "content-type")
-           (re-find #"(?i)charset=\"?([\w.:-]+)")
-           second))
-
-#?(:clj
-   (defn ^:no-doc inflated
-     "The `body` bytes of the response with `headers`, gunzipped when the
-     response says so, to at most `max-bytes`, or without a limit for nil."
-     ^bytes [headers ^bytes body max-bytes]
-     (if (gzipped? headers)
-       (gunzip body max-bytes nil)
-       body)))
-
-#?(:clj
-   (defn decode
-     "The `body` bytes of the response with `headers` as a string,
-     gunzipped to at most `max-bytes` when the response says so.
-
-     With nil `max-bytes`, there's no limit. The body is decoded as an XML
-     document is, with the charset that the Content-Type names."
-     ([headers body]
-      (decode headers body nil))
-     ([headers ^bytes body max-bytes]
-      (encoding/decode (inflated headers body max-bytes) (charset headers)))))
-
-;; RFC 9110, section 14.4
-(defn content-range
-  "The byte range and the size of the whole file that the Content-Range
-  header value `s` names, e.g. bytes 0-1023/146515, as a map of :start,
-  :end and :total.
-
-  It's nil when `s` doesn't read, and the :total is nil when the server
-  doesn't know the size."
-  [s]
-  (let [pattern #"(?i)\s*bytes\s+(\d{1,15})-(\d{1,15})/(\d{1,15}|\*)\s*"]
-    (when-let [[_ start end total] (some->> s (re-matches pattern))]
-      {:start (parse-long start)
-       :end   (parse-long end)
-       :total (when (not= "*" total)
-                (parse-long total))})))
-
-(defn- byte-range
-  "The range that `spec`, one byte range of a Range header, asks for, as a
-  pair of its start and end, or nil when it doesn't read."
-  [spec]
-  (when-let [[_ start end] (re-matches #"(\d{0,15})\s*-\s*(\d{0,15})" spec)]
-    (cond
-      (and (seq start) (seq end))
-      (let [a (parse-long start)
-            b (parse-long end)]
-        (when (<= a b) [a b]))
-
-      (seq start)
-      [(parse-long start) nil]
-
-      (seq end)
-      [nil (parse-long end)])))
-
-(defn byte-ranges
-  "The byte ranges that the Range header value `s` asks for, as RFC 9110,
-  section 14.1.2, reads them. Nil when `s` doesn't read, because a server
-  then ignores it.
-
-  A value such as bytes=0-1023, 5000- asks for two ranges. A range is a
-  pair of its start and its end, with the end included, or nil for the
-  rest of the file. A nil start and an end of n ask for the last n
-  bytes."
-  [s]
-  (when-let [[_ specs] (some->> s (re-matches #"(?i)\s*bytes\s*=\s*(.*)"))]
-    (let [ranges (for [spec (map str/trim (str/split specs #","))
-                       :when (seq spec)]
-                   (byte-range spec))]
-      (when (and (seq ranges)
-                 (every? some? ranges))
-        (vec ranges)))))
-
-#?(:clj
-   (defn- java-request
-     "The java.net.http request of `method` to `uri`, with `headers`, the
-     `body` string and a timeout of `timeout-ms` milliseconds.
-
-     Gzip is accepted unless the headers name an Accept-Encoding. A header
-     and a body that are hidden texts go out as their texts."
-     ^HttpRequest [^URI uri method headers body timeout-ms]
-     (let [gzip?   (not-any? #(= "accept-encoding" (str/lower-case (str %)))
-                             (keys headers))
-           add     (fn [^HttpRequest$Builder b k v]
-                     (.header b (str k) (str (secret/reveal v))))
-           builder (cond-> (.timeout (HttpRequest/newBuilder uri)
-                                     (Duration/ofMillis timeout-ms))
-                     gzip? (.header "Accept-Encoding" "gzip"))
-           builder (reduce-kv add builder headers)]
-       (-> (if (or (nil? method) (= :get method))
-             (.GET ^HttpRequest$Builder builder)
-             (.method ^HttpRequest$Builder builder
-                      (str/upper-case (name method))
-                      (let [body (secret/reveal body)]
-                        (cond
-                          (nil? body)   (HttpRequest$BodyPublishers/noBody)
-                          (bytes? body) (HttpRequest$BodyPublishers/ofByteArray
-                                         body)
-                          :else         (HttpRequest$BodyPublishers/ofString
-                                         (str body))))))
-           (.build)))))
-
-(defn timeout?
-  "Whether the exception `e` of a request, or one of its causes, is a
-  timeout: ::timeout, or the timeout of the platform's client."
-  [e]
-  (let [cause  #?(:clj ex-cause :cljs #(.-cause %))
-        causes (take-while some? (iterate cause e))]
-    (boolean (some #(or (= ::timeout (:type (ex-data %)))
-                        #?(:clj  (instance? HttpTimeoutException %)
-                           :cljs (= "TimeoutError" (.-name %))))
-                   causes))))
-
-(defn- redirect-url
-  "Where a redirect of the request to `url` with the Location `location`
-  leads, or nil when it names no http or https URL with a host. It's nil
-  too when it leaves https for http, which the client of the JDK refuses
-  as well."
-  [url location]
-  (when-let [target (some->> location (url/absolute-url url))]
-    (when (and (url/web-url? target)
-               (not (and (= "https" (url/scheme url))
-                         (= "http" (url/scheme target)))))
-      target)))
-
-(defn ^:no-doc refusal
-  "The exception of a request to `url` that :allow-pred refused."
-  [url]
-  (ex-info (str "The request to " url " is not allowed")
-           {:type ::refused :url url}))
-
-(def ^:no-doc credential-headers
-  "The names of the headers that hold credentials, in lower case."
-  #{"authorization" "cookie" "proxy-authorization"})
-
-;; RFC 9110, section 15.4
-(defn ^:no-doc redirected
-  "The request that follows `request` after a redirect of `status` to the
-  URL `target`.
-
-  A 303, or a 301 or 302 to a POST, turns into a GET without a body, as
-  browsers and the JDK do. A HEAD stays a HEAD. Credentials stay behind
-  when the redirect leaves the origin."
-  [{:keys [method url headers body] :as request} status target]
-  (let [get?        (or (= 303 status)
-                        (and (#{301 302} status) (= :post method)))
-        credential? (fn [[k _]]
-                      (credential-headers (str/lower-case (str k))))]
-    (assoc request
-           :url     target
-           :method  (if (and get? (not= :head method)) :get method)
-           :headers (cond->> headers
-                      (not (url/same-origin? url target))
-                      (into {} (remove credential?)))
-           :body    (when-not get? body))))
-
-;; RFC 9110, section 15.4
-(def ^:no-doc redirect-statuses
-  "The statuses of the redirects that send! follows."
-  #{301 302 303 307 308})
-
-(def ^:no-doc max-redirects
-  "How many redirects send! follows at most."
-  5)
-
-#?(:clj
-   (defn ^:no-doc send-following!
-     "Send the `request`, follow its redirects until the instant `deadline`
-     in epoch milliseconds, and check each URL with `allow-pred`.
-
-     It gives the last response and the redirects before it, each as a
-     vector of its status, URL and headers. It follows five redirects at
-     most itself, since the JDK sends credentials on to another origin. A
-     URL that `allow-pred` refuses throws ::refused."
-     [request deadline allow-pred]
-     (loop [request (update request :url url/legal-url)
-            chain   []]
-       (let [{:keys [url method headers body]} request
-             uri  (URI. url)
-             left (- deadline (System/currentTimeMillis))]
-         (when-not (pos? left)
-           (throw (HttpTimeoutException. (str "request timed out: " uri))))
-         (when-not (allow-pred url)
-           (throw (refusal url)))
-         (let [outgoing  (java-request uri method headers body left)
-               response  (.send ^HttpClient @client outgoing
-                                (HttpResponse$BodyHandlers/ofInputStream))
-               status    (.statusCode response)
-               location  (-> (.headers response)
-                             (.firstValue "location")
-                             (.orElse nil))
-               target    (when (and (redirect-statuses status)
-                                    (< (count chain) max-redirects))
-                           (some-> (redirect-url url location) url/legal-url))]
-           (if-not target
-             [response chain]
-             (do (.close ^InputStream (.body response))
-                 (recur (redirected request status target)
-                        (conj chain [status url (headers-of response)])))))))))
-
-(defn- permanent-url
-  "The URL that the first request moved to for good, by the redirects in
-  `chain` before `final-url`, or nil when the first isn't permanent.
-
-  A redirect is permanent when it's a 301 or a 308, and the URL is the one
-  that the permanent redirects at the start of the chain lead to."
-  [chain final-url]
-  (let [n (count (take-while #(#{301 308} (first %)) chain))]
-    (when (pos? n)
-      (get (conj (mapv second chain) final-url) n))))
-
-(defn ^:no-doc prefix-length
-  "How much of the body of an answer of `status` to read for a request of
-  the bytes `range`, or nil to read all of it. The answer sends from
-  `start`, it can be `gzipped?`, and the body is read to `max-bytes`.
-
-  - Of a 206, it's the bytes from the start to the end of the range,
-    since a server can send more than was asked.
-  - Of a 200 that isn't gzipped, which is the whole file as it is, it's
-    the bytes from its start to the end of the range.
-  - Of any other answer that isn't gzipped, e.g. the page of a 404, it's
-    as many bytes as the range names.
-
-  It's nil when the range has no end, or when the prefix is longer than
-  `max-bytes`."
-  [status start gzipped? range max-bytes]
-  (let [end  (second range)
-        from (cond
-               (= 206 status) (or start (first range))
-               gzipped?       nil
-               (= 200 status) 0
-               :else          (first range))]
-    (when (and end from)
-      (let [n (max 0 (inc (- end from)))]
-        (when (<= n (or max-bytes 0x7FFFFFFF))
-          n)))))
-
-#?(:cljs
-   (def ^:no-doc browser?
-     "Whether the code runs in a page or a worker of a browser. There, a
-     header that a request sets can make fetch send a preflight request
-     first, and the browser sends its own User-Agent."
-     (or (exists? js/document) (exists? js/WorkerGlobalScope))))
-
 #?(:cljs
    (def ^:no-doc node?
      "Whether send! sends with node:http, as it does in Node, rather than
      with fetch."
-     (and (not browser?) node/available?)))
+     (and (not browser/available?) node/available?)))
 
 (defn- request-headers
   "The `headers` of a request for the bytes `range`, with the Range header,
@@ -610,232 +88,11 @@
   gzipped, so that the offsets are those of the file."
   [headers range agent]
   (cond-> (merge #?(:clj  {"User-Agent" agent}
-                    :cljs (when-not browser? {"User-Agent" agent}))
+                    :cljs (when-not browser/available? {"User-Agent" agent}))
                  headers)
     range (assoc "Range" (str "bytes=" (first range) "-" (second range)))
     #?@(:clj  [range (assoc "Accept-Encoding" "identity")]
         :cljs [(and range node?) (assoc "Accept-Encoding" "identity")])))
-
-#?(:clj
-   (defn- response-bytes
-     "The bytes of the body of `response` to `request`, read until
-     `deadline`, no more than the range of the request needs."
-     ^bytes [^HttpResponse response
-             {:keys [method url range max-bytes] :as request}
-             deadline]
-     (let [headers (headers-of response)
-           start   (:start (content-range (header headers "content-range")))
-           n       (prefix-length (.statusCode response) start
-                                  (gzipped? headers) range max-bytes)]
-       (with-open [^InputStream in (.body response)]
-         (cond
-           ;; an answer to HEAD has no content by RFC 9110, section
-           ;; 9.3.2, though some servers send one over HTTP/2
-           (= :head method) (byte-array 0)
-           n                (within in deadline url #(.readNBytes in (int n)))
-           :else            (read-within in deadline max-bytes url))))))
-
-#?(:clj
-   (defn- java-answer
-     "The response map for the `response` of the JDK to `request`, with the
-     body `bytes`, which came after the redirects `chain`."
-     [^HttpResponse response ^bytes bytes chain
-      {:keys [as max-bytes] :as request}]
-     (let [status   (.statusCode response)
-           headers  (headers-of response)
-           final    (str (.uri response))
-           moved    (permanent-url chain final)
-           received (content-range (header headers "content-range"))]
-       (cond-> {:status  status
-                :url     final
-                :headers headers
-                :body    (when (and (not= 304 status) (pos? (alength bytes)))
-                           (if (= :bytes as)
-                             (inflated headers bytes max-bytes)
-                             (decode headers bytes max-bytes)))}
-         moved       (assoc :permanent-url moved)
-         (seq chain) (assoc :redirects chain)
-         received    (assoc :content-range received)))))
-
-#?(:cljs
-   (defn- late
-     "The exception of a request to `url` that didn't end in time."
-     [url]
-     (ex-info (str "The request did not end in time: " url)
-              {:type ::timeout :url url})))
-
-#?(:cljs
-   (defn- checked!
-     "A promise of the addresses that the request to `url` may connect to,
-     once `allow-pred` took the URL, by the instant `deadline`, or of nil
-     for a host that's an address. It rejects with ::refused when
-     `allow-pred` refuses the URL.
-
-     A name is looked up first, so that url/public? checks its addresses
-     too."
-     [url allow-pred deadline]
-     (let [host (some-> (url/host url) (str/replace #"\.$" ""))
-           ask  (fn [found]
-                  (let [numbers (mapv (comp url/ip-address :address) found)]
-                    (if (binding [url/*addresses* (cond-> {}
-                                                    found (assoc host numbers))]
-                          (allow-pred url))
-                      found
-                      (throw (refusal url)))))]
-       (if (or (nil? host) (url/ip-address host))
-         (.then (js/Promise.resolve nil) ask)
-         (.then (node/lookup! host deadline #(late url)) ask)))))
-
-#?(:cljs
-   (defn- node-following!
-     "A promise of the answer to `request` before its body is read, the
-     redirects before it and the last request, as a vector. It follows the
-     redirects until the instant `deadline` and checks each URL with
-     `allow-pred`, as send-following! does on the JVM."
-     [request deadline allow-pred]
-     (letfn [(step [{:keys [url] :as request} chain]
-               (-> (checked! url allow-pred deadline)
-                   (.then #(node/open! (revealed request) % deadline
-                                       (fn [] (late url))))
-                   (.then (fn [{:keys [status headers] :as answer}]
-                            (let [location (header headers "location")
-                                  target   (when (and (redirect-statuses status)
-                                                      (< (count chain)
-                                                         max-redirects))
-                                             (redirect-url url location))]
-                              (if-not target
-                                [answer chain request]
-                                (do (node/close! answer)
-                                    (step (redirected request status target)
-                                          (conj chain
-                                                [status url headers])))))))))]
-       (step request []))))
-
-#?(:cljs
-   (defn- node-answer
-     "A promise of the response map for the `answer` of node:http to the
-     `request`, which came after the redirects `chain`."
-     [{:keys [status headers] :as answer} chain
-      {:keys [method url as range max-bytes] :as request}]
-     (let [received (content-range (header headers "content-range"))
-           gzipped  (gzipped? headers)
-           n        (prefix-length status (:start received) gzipped range
-                                   max-bytes)
-           moved    (permanent-url chain url)
-           inflate  (fn [b]
-                      (if gzipped
-                        (or (node/gunzip b max-bytes)
-                            (throw (too-large url max-bytes)))
-                        b))]
-       (-> (cond
-             ;; an answer to HEAD has no content by RFC 9110, section 9.3.2
-             (= :head method) (do (node/close! answer)
-                                  (js/Promise.resolve (js/Uint8Array. 0)))
-             n                (node/read! answer n nil nil)
-             :else            (node/read! answer nil max-bytes
-                                          #(too-large url max-bytes)))
-           (.then (fn [b]
-                    (cond-> {:status  status
-                             :url     url
-                             :headers headers
-                             :body    (when (and (not= 304 status)
-                                                 (pos? (.-length b)))
-                                        (if (= :bytes as)
-                                          (inflate b)
-                                          (encoding/decode (inflate b)
-                                                           (charset headers))))}
-                      moved       (assoc :permanent-url moved)
-                      (seq chain) (assoc :redirects chain)
-                      received    (assoc :content-range received))))))))
-
-#?(:cljs
-   (defn- node-send!
-     "A promise of the response to `request`, sent with node:http within
-     `timeout-seconds`, to URLs that `allow-pred` takes.
-
-     Gzip is accepted unless the headers name an Accept-Encoding."
-     [{:keys [headers] :as request} timeout-seconds allow-pred]
-     (let [deadline (+ (js/Date.now) (* 1000 timeout-seconds))
-           named?   (some #(= "accept-encoding" (str/lower-case (str %)))
-                          (keys headers))
-           request  (cond-> request
-                      (not named?) (assoc-in [:headers "Accept-Encoding"]
-                                             "gzip"))]
-       (.then (node-following! request deadline allow-pred)
-              (fn [[answer chain last-request]]
-                (node-answer answer chain last-request))))))
-
-#?(:cljs
-   (defn- read-body
-     "A promise of the body of the fetch response `res` from `url` as
-     bytes, as much as `opts` say:
-
-     - With :first, it's that many bytes from the start, and the rest is
-       left unread.
-     - With :max-bytes, it's the whole body, and the promise is rejected
-       with ::too-large once more bytes arrive.
-     - Without either, it's the whole body."
-     [res url {:keys [max-bytes] :as opts}]
-     (let [reader (.getReader (.-body res))
-           n      (or (:first opts) max-bytes ##Inf)
-           all?   (nil? (:first opts))]
-       (letfn [(join [chunks]
-                 (.catch (.cancel reader) (fn [_] nil))
-                 (let [size (min n (reduce + (map #(.-length %) chunks)))
-                       out  (js/Uint8Array. size)]
-                   (reduce (fn [p chunk]
-                             (let [k (min (.-length chunk) (- size p))]
-                               (.set out (.subarray chunk 0 k) p)
-                               (+ p k)))
-                           0 chunks)
-                   out))
-               (step [chunks got]
-                 (cond
-                   (and all? (> got n))
-                   (do (.catch (.cancel reader) (fn [_] nil))
-                       (throw (too-large url n)))
-
-                   (and (not all?) (>= got n))
-                   (join chunks)
-
-                   :else
-                   (.then (.read reader)
-                          (fn [r]
-                            (if (.-done r)
-                              (join chunks)
-                              (let [chunk (.-value r)]
-                                (step (conj chunks chunk)
-                                      (+ got (.-length chunk)))))))))]
-         (js/Promise.resolve (step [] 0))))))
-
-#?(:cljs
-   (defn- fetch-answer
-     "A promise of the response map for the fetch response `res` to the
-     `request`."
-     [res {:keys [method url as range max-bytes] :as request}]
-     (let [status   (.-status res)
-           received (content-range (.get (.-headers res) "content-range"))
-           headers  (into {}
-                          (map (fn [[k v]] [k [v]]))
-                          (es6-iterator-seq (.entries (.-headers res))))
-           response (cond-> {:status  status
-                             :url     (.-url res)
-                             :headers headers}
-                      received                (assoc :content-range received)
-                      (= "cors" (.-type res)) (assoc :filtered? true))
-           ;; fetch undoes gzip itself, so a prefix is one of the file
-           n        (prefix-length status (:start received) false range
-                                   max-bytes)]
-       (if (or (= :head method) (nil? (.-body res)))
-         response
-         (.then (read-body res url (if n {:first n} {:max-bytes max-bytes}))
-                (fn [b]
-                  (cond-> response
-                    (pos? (.-length b))
-                    (assoc :body (if (= :bytes as)
-                                   b
-                                   (encoding/decode b
-                                                    (charset headers)))))))))))
 
 (defn send!
   "Send the `request`, and give the response as a map of :status, :url,
@@ -845,16 +102,16 @@
   The request is a map of :method, :url, :headers and :body. It's a GET
   unless :method names another method, and it goes with the :body, a
   string or bytes, when it has one. A header and a body can be hidden
-  texts, and they go out as their texts. The body of the
-  response is text, with gzip undone. It's absent for a HEAD request and
-  for an empty body.
+  texts, and they go out as their texts. The body of the response is
+  text, with gzip undone. It's absent for a HEAD request and for an empty
+  body.
 
   The `request` can also have these keys:
 
   - :as :bytes, for a body of bytes, e.g. of a media file
   - :timeout-seconds, the limit of the whole exchange, 30 by default
-  - :max-bytes, the limit of the body, default-max-bytes by default, or
-    nil for no limit
+  - :max-bytes, the limit of the body, 100 MB by default, or nil for no
+    limit
   - :range, a pair of the first and the last byte to ask for, as RFC
     9110, section 14.1.2, has it. A nil last byte asks for the rest.
   - :allow-pred, a predicate of a URL, as url/public? is
@@ -863,8 +120,8 @@
 
   An exchange that goes beyond a limit throws ::timeout or ::too-large.
   On the JVM, the client of the JDK throws its HttpTimeoutException while
-  it waits for the headers. When :allow-pred refuses the URL of the request,
-  it throws ::refused.
+  it waits for the headers. When :allow-pred refuses the URL of the
+  request, it throws ::refused.
 
   A server that sends the range answers 206, and the response then has
   the :content-range, a map of :start, :end and :total. A server that
@@ -899,35 +156,15 @@
     :as   request}]
   (let [method  (some-> method name str/lower-case keyword)
         agent   (or (:user-agent request) user-agent)
-        headers (request-headers headers (:range request) agent)
-        request (assoc (merge {:max-bytes default-max-bytes} request)
-                       :method  method
-                       :headers headers)]
-    #?(:clj  (let [deadline         (+ (System/currentTimeMillis)
-                                       (* 1000 timeout-seconds))
-                   [response chain] (send-following! request deadline
-                                                     allow-pred)
-                   bytes            (response-bytes response request deadline)]
-               (java-answer response bytes chain request))
-       :cljs (let [{:keys [url body]} request]
-               (cond
-                 node?
-                 (node-send! request timeout-seconds allow-pred)
-
-                 (not (allow-pred url))
-                 (js/Promise.reject (refusal url))
-
-                 :else
-                 ;; a hidden header and a hidden body go out as their texts
-                 (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
-                       verb   (str/upper-case (name (or method :get)))
-                       init   (cond-> {:method  verb
-                                       :headers (:headers (revealed request))
-                                       :signal  signal}
-                                (some? body)
-                                (assoc :body (secret/reveal body)))]
-                   (-> (js/fetch url (clj->js init))
-                       (.then #(fetch-answer % request)))))))))
+        request (-> (merge {:max-bytes limits/default-max-bytes} request)
+                    (assoc :method  method
+                           :headers (request-headers headers (:range request)
+                                                     agent))
+                    revealed)]
+    #?(:clj  (jvm/send! request timeout-seconds allow-pred)
+       :cljs (if node?
+               (node/send! request timeout-seconds allow-pred)
+               (browser/send! request timeout-seconds allow-pred)))))
 
 (defn send-public!
   "Send the `request`, but only to a host on the public internet. On the
@@ -950,6 +187,37 @@
   [request opts]
   (into request (remove (comp nil? val)) (select-keys opts option-keys)))
 
+(defn timeout?
+  "Whether the exception `e` of a request, or one of its causes, is a
+  timeout: ::timeout, or the timeout of the platform's client."
+  [e]
+  (let [cause  #?(:clj ex-cause :cljs #(.-cause %))
+        causes (take-while some? (iterate cause e))]
+    (boolean (some #(or (= ::timeout (:type (ex-data %)))
+                        #?(:clj  (instance? HttpTimeoutException %)
+                           :cljs (= "TimeoutError" (.-name %))))
+                   causes))))
+
+(defn failure
+  "The exception `e` of a request that failed, as data: its :reason, and
+  the :type, :url and :status that it holds."
+  [e]
+  (into {:reason (async/explain e)}
+        (select-keys (ex-data e) [:type :url :status])))
+
+(defn try-send!
+  "Send the `request` with `send`, a function such as send!, and give a
+  map of the response as the :value, or of the exception as the :error
+  where `send` throws. The `opts` are the :timeout-seconds, :max-bytes,
+  :allow-pred and :user-agent to put in the request.
+
+  The map comes in a future on the JVM and in a promise in ClojureScript,
+  so several requests can be under way at once."
+  ([send request]
+   (try-send! send request {}))
+  ([send request opts]
+   (async/attempt #(send (with-options request opts)))))
+
 (defn fetch-request
   "The request for the document at `url` with `opts`, the options of
   fetch!.
@@ -971,6 +239,12 @@
                   auth          (assoc "Authorization" auth))}
       opts))))
 
+(defn- now
+  "The instant now, by the clock of the platform."
+  []
+  #?(:clj  (java.util.Date.)
+     :cljs (js/Date.)))
+
 (defn fetch!
   "GET the document at `url` with `opts`, and give the response with the
   body as text, in ClojureScript as a promise.
@@ -987,17 +261,19 @@
   - :accept, the Accept header, */* by default
   - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
     takes them
-  - :max-wait-seconds, as not-before takes it
+  - :max-wait-seconds, as headers/not-before takes it
   - :send, the function that sends the request, send! by default"
   ([url]
    (fetch! url {}))
   ([url {:keys [send] :or {send send!} :as opts}]
    (async/then (send (fetch-request url opts))
-               (fn [{:keys [headers] :as response}]
+               (fn [{response-headers :headers :as response}]
                  (let [limits        (select-keys opts [:max-wait-seconds])
-                       wait          (not-before headers (now) limits)
-                       etag          (header headers "etag")
-                       last-modified (header headers "last-modified")]
+                       wait          (headers/not-before response-headers (now)
+                                                         limits)
+                       etag          (headers/header response-headers "etag")
+                       last-modified (headers/header response-headers
+                                                     "last-modified")]
                    (cond-> (assoc response
                                   :etag          etag
                                   :last-modified last-modified)
@@ -1023,29 +299,14 @@
      ([url algorithms {:keys [headers timeout-seconds allow-pred]
                        :or   {timeout-seconds 600 allow-pred (constantly true)}
                        :as   opts}]
-      (let [deadline       (+ (System/currentTimeMillis)
-                              (* 1000 timeout-seconds))
-            ;; before the request, since an algorithm that the platform lacks
-            ;; throws
-            digests        (into {} (for [a algorithms]
-                                      [a (MessageDigest/getInstance a)]))
-            headers        (merge {"User-Agent"      (or (:user-agent opts)
-                                                         user-agent)
-                                   "Accept-Encoding" "identity"}
-                                  headers)
-            request        {:url url :method :get :headers headers}
-            [response _]   (send-following! request deadline allow-pred)
-            status         (.statusCode ^HttpResponse response)
-            update-digests (fn [^bytes buffer n]
-                             (doseq [^MessageDigest d (vals digests)]
-                               (.update d buffer 0 (int n))))]
-        (with-open [^InputStream in (.body ^HttpResponse response)]
-          (when (= 200 status)
-            (within in deadline url #(pump in nil url update-digests))))
-        (cond-> {:status status :url (str (.uri ^HttpResponse response))}
-          (= 200 status)
-          (assoc :digests (update-vals digests
-                                       #(.digest ^MessageDigest %))))))))
+      (let [agent   (or (:user-agent opts) user-agent)
+            request {:url     url
+                     :method  :get
+                     :headers (merge {"User-Agent"      agent
+                                      "Accept-Encoding" "identity"}
+                                     headers)}]
+        (jvm/digests! (revealed request) algorithms timeout-seconds
+                      allow-pred)))))
 
 (defn- whole-size
   "The size of the file whose first `n` bytes came in a 200 to a request
@@ -1064,14 +325,14 @@
       (contains? #{nil "identity"} coding)
       (some-> content-length str/trim parse-long))))
 
+;; RFC 9110, section 14.4
 (defn- unsatisfied-total
   "The size of the whole file that the Content-Range value `s` of an
-  answer of 416 gives, or nil when it gives none. RFC 9110, section 14.4,
-  defines the value."
+  answer of 416 gives, or nil when it gives none."
   [s]
   (some->> s (re-matches #"(?i)\s*bytes\s+\*/(\d{1,15})\s*") second parse-long))
 
-(defn ^:no-doc failed
+(defn- failed
   "The exception for the answer to a request for the file at `url` whose
   `status` is a failure."
   [url status]
@@ -1114,7 +375,7 @@
         (send (with-options request opts))
         (fn [{:keys [status body content-range] :as response}]
           (let [body (or body (bytes/of []))
-                h    #(header (:headers response) %)]
+                h    #(headers/header (:headers response) %)]
             (case (long status)
               206 {:bytes body
                    :start (or (:start content-range) start)
@@ -1131,23 +392,6 @@
                    :total (unsatisfied-total (h "content-range"))}
               (throw (failed url status))))))))))
 
-(defn media-type
-  "The media type of the Content-Type value `s`, or of a type attribute,
-  or nil when `s` names none.
-
-  The media type is in lower case, without its parameters."
-  [s]
-  (some-> s (str/split #";" 2) first str/trim str/lower-case not-empty))
-
-(defn- cors
-  "The origins that the Access-Control-Allow-Origin of the response
-  `headers` allows to read it, with all its values joined.
-
-  A browser reads them joined too, so no page can read an answer that
-  has two."
-  [headers]
-  (joined headers "access-control-allow-origin"))
-
 (defn facts
   "What the `response` tells about its file, as far as it tells it.
 
@@ -1162,10 +406,11 @@
   - :range, the Content-Range, as a map of :start, :end and :total
   - :encoding, :etag and :last-modified, from their headers
   - :cors, the origins that Access-Control-Allow-Origin allows to read
-    the answer
+    the answer, with all its values joined, as a browser joins them
   - :filtered?, as in the response"
   [response]
-  (let [h        #(header (:headers response) %)
+  (let [h        #(headers/header (:headers response) %)
+        cors     #(headers/joined % "access-control-allow-origin")
         redirect (fn [[status url headers]]
                    (let [allowed (cors headers)]
                      (cond-> {:status status :url url}
@@ -1180,7 +425,7 @@
            :redirects     (not-empty (mapv redirect (:redirects response)))
            :permanent-url (:permanent-url response)
            :location      (h "location")
-           :type          (media-type (h "content-type"))
+           :type          (headers/media-type (h "content-type"))
            :length        length
            :range         (:content-range response)
            :encoding      (h "content-encoding")
@@ -1189,27 +434,7 @@
            :cors          (cors (:headers response))
            :filtered?     (:filtered? response)})))
 
-(defn try-send!
-  "Send the `request` with `send`, a function such as send!, and give a
-  map of the response as the :value, or of the exception as the :error
-  where `send` throws. The `opts` are the :timeout-seconds, :max-bytes,
-  :allow-pred and :user-agent to put in the request.
-
-  The map comes in a future on the JVM and in a promise in ClojureScript,
-  so several requests can be under way at once."
-  ([send request]
-   (try-send! send request {}))
-  ([send request opts]
-   (async/attempt #(send (with-options request opts)))))
-
-(defn failure
-  "The exception `e` of a request that failed, as data: its :reason, and
-  the :type, :url and :status that it holds."
-  [e]
-  (into {:reason (async/explain e)}
-        (select-keys (ex-data e) [:type :url :status])))
-
-(defn ^:no-doc sent-facts
+(defn- sent-facts
   "The facts of the response of an `attempt` to send, or a map with its
   failure under :error for a request that failed."
   [{:keys [value error] :as attempt}]
@@ -1257,20 +482,6 @@
 
 (comment
   (authorization {:username "ann" :password "secret"})
-  (byte-ranges "bytes=0-1023, 5000-")
-
-  ;; an hour at most, though the server says a day
-  (not-before {"cache-control" "max-age=86400"} #inst "2026-09-29T12:00:00Z"
-              {:max-wait-seconds 3600})
-
-  ;; a POST that a 303 turns into a GET, and credentials that stay behind
-  (redirected {:method  :post
-               :url     "https://a.example/x"
-               :headers {"Authorization" "Basic …"}
-               :body    "{}"}
-              303
-              "https://b.example/y")
-
   (send! {:url "https://example.org/episode.mp3" :range [0 1023] :as :bytes})
   (probe! "https://example.org/episode.mp3")
   #_.)

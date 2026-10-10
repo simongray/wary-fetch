@@ -8,6 +8,7 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.bytes :as bytes]
+            [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.proxy :as proxy]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run utf8]]
@@ -44,7 +45,7 @@
         (case url
           "https://slow.example/" (throw (ex-info "Timed out" {:type ::http/timeout :url url}))
           "https://big.example/"  (throw (ex-info "Too large" {:type ::http/too-large :url url}))
-          (throw (http/refusal url))))))
+          (throw (limits/refusal url))))))
 
 (defn- server
   "The proxy with `send` as its :send: handler on the JVM, and in

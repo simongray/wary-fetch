@@ -10,7 +10,7 @@
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.proxy :as proxy]
             [dk.simongray.wary-fetch.secret :as secret]
-            [dk.simongray.wary-fetch.test-support :refer [run]]
+            [dk.simongray.wary-fetch.test-support :refer [run utf8]]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def feed-xml
@@ -76,7 +76,7 @@
        :url     url
        :headers (lower headers #(if (string? %) [%] (vec %)))
        :body    (when (and body (pos? (bytes/length body)))
-                  (if (= :bytes as) body (bytes/decode body 0 (bytes/length body) :utf8)))})))
+                  (if (= :bytes as) body (utf8 body)))})))
 
 (deftest the-request-that-goes-on
   (let [ring    {:request-method :get
@@ -89,22 +89,24 @@
                                   "user-agent"    "A browser"}}
         request (proxy/upstream-request ring)]
     (is (= ["https://a.example/ep.mp3" :get :bytes [0 3]] ((juxt :url :method :as :range) request)))
-    (is (= {"accept" "*/*" "if-none-match" "\"v1\"" "User-Agent" http/user-agent "Via" "1.1 wary-fetch"} (:headers request))
+    (is (= [{"accept" "*/*" "if-none-match" "\"v1\"" "Via" "1.1 wary-fetch"} http/user-agent]
+           ((juxt :headers :user-agent) request))
         "neither the page's cookies, its credentials nor its User-Agent go on")
     (is (= [url/public? (* 32 1024 1024)]
            ((juxt :allow-pred :max-bytes) request)))
     (is (nil? (:as (proxy/upstream-request (assoc ring :query-string "url=https%3A%2F%2Fa.example%2F"))))
         "text, unless the page asks for bytes")
     (is (nil? (proxy/upstream-request (assoc ring :query-string "url=file%3A%2F%2F%2Fetc%2Fpasswd"))))
-    (is (= {"accept" "*/*" "Via" "1.1 wary-fetch" "User-Agent" "Mine"}
-           (:headers (proxy/upstream-request ring {:forward #{"accept"} :user-agent "Mine"})))
+    (is (= [{"accept" "*/*" "Via" "1.1 wary-fetch"} "Mine"]
+           ((juxt :headers :user-agent)
+            (proxy/upstream-request ring {:forward #{"accept"} :user-agent "Mine"})))
         "an option replaces its default, and the others stay")))
 
 (deftest the-answer-that-comes-back
   (let [{:keys [status headers body]} (proxy/ring-response (answers "https://a.example/feed.xml"))]
     (is (= 200 status))
     (is (= "application/rss+xml; charset=utf-8" (get headers "Content-Type")) "the text goes as UTF-8")
-    (is (= feed-xml (bytes/decode body 0 (bytes/length body) :utf8)))
+    (is (= feed-xml (utf8 body)))
     (is (= ["\"v1\"" nil] [(get headers "etag") (get headers "set-cookie")]) "only the headers that it exposes")
     (is (= ["https://b.example/feed.xml" "https://b.example/feed.xml"]
            [(get headers "Content-Location") (get headers proxy/permanent-header)]))
@@ -160,6 +162,6 @@
 
 (deftest requests-that-are-not-http
   (let [sent (atom [])
-        send (proxy/sender "/proxy" {:send #(do (swap! sent conj %) {:events []})})]
-    (send {:url "wss://relay.example" :filters [{"kinds" [1]}]})
-    (is (= [{:url "wss://relay.example" :filters [{"kinds" [1]}]}] @sent) "go to the :send as they are")))
+        send (proxy/sender "/proxy" {:send #(do (swap! sent conj %) {:messages []})})]
+    (send {:url "wss://socket.example/" :message "hello"})
+    (is (= [{:url "wss://socket.example/" :message "hello"}] @sent) "go to the :send as they are")))

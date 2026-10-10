@@ -19,6 +19,12 @@
                  (.catch (fn [e] (is false (str "rejected: " e))))
                  (.finally done)))))
 
+(defn utf8
+  "The text of the UTF-8 bytes `b`."
+  [b]
+  #?(:clj  (String. ^bytes b "UTF-8")
+     :cljs (.decode (js/TextDecoder.) b)))
+
 #?(:clj
    (defn- answer
      "What the server of `with-server` answers the request for the file

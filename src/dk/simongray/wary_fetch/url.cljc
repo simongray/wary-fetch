@@ -50,7 +50,7 @@
                     (percent-encode (name k))
                     (str (percent-encode (name k)) "=" (percent-encode v))))))
 
-(defn ^:no-doc query-params
+(defn query-params
   "The parameters of the query string `s`, decoded, by name. A plus sign
   is a space, as in the body of a form."
   [s]
@@ -243,7 +243,7 @@
                  nil)))))
 
 ;; URL Standard, section 4.4, the basic URL parser
-(defn ^:no-doc scheme
+(defn scheme
   "The scheme of the URL `s` in lower case, or nil for a relative URL. It's
   read as a browser reads it: without the tabs and line breaks in it, and
   without the spaces and control characters in front."
@@ -278,10 +278,10 @@
                   (not (re-find #"[\x00-\x20\x7F\"#%/<>?@\\^`{|}]" host)))
          [host port]))))
 
-(defn ^:no-doc origin
-  "The scheme, host and port of the http or https URL `url`, as the URL
-  standard and browsers read them. Nil for another URL, and for a URL
-  without a host.
+(defn origin
+  "The scheme, host and port of the http or https URL `url` as a vector,
+  as the URL standard and browsers read them. Nil for another URL, and for
+  a URL without a host.
 
   The host is in lower case, and a name with letters outside ASCII is in
   the ASCII form of IDNA. When the URL names no port, the port is the one
@@ -307,19 +307,19 @@
              (catch :default _
                nil))))
 
-(defn ^:no-doc host
+(defn host
   "The host of the http or https URL `url`, in lower case."
   [url]
   (second (origin url)))
 
-(defn ^:no-doc web-url?
+(defn web-url?
   "Whether `s` is an http or https URL with a host."
   [s]
   (boolean (and (string? s)
                 (re-find #"(?i)^https?://" s)
                 (origin s))))
 
-(defn ^:no-doc same-origin?
+(defn same-origin?
   "Whether the URLs `a` and `b` have the same scheme, host and port. False
   when a URL has no host."
   [a b]
@@ -462,7 +462,7 @@
     (when all
       (vec (mapcat (fn [w] [(quot w 256) (rem w 256)]) all)))))
 
-(defn ^:no-doc ip-address
+(defn ip-address
   "The bytes of the IP address that the text `s` writes, as numbers, or
   nil for anything else, e.g. a name or a hash.
 
@@ -477,7 +477,7 @@
 
 ;; RFC 6761, section 6.3 (localhost); RFC 6762, section 3 (.local);
 ;; RFC 8375 (.home.arpa)
-(defn ^:no-doc public-name?
+(defn public-name?
   "Whether the domain name `host` is a name of the public internet.
 
   Such a name has a dot in it, not counting a dot at its end. It also

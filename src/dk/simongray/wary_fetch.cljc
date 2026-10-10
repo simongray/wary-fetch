@@ -70,28 +70,6 @@
       :else
       nil)))
 
-;; RFC 7617, section 2 (Basic); RFC 6750, section 2.1 (Bearer)
-(defn credentials
-  "The credentials in the Authorization header `authorization`, as a map,
-  or nil when it has none.
-
-  The map has :username and :password for basic authentication, or :token
-  for a bearer token, and the password and the token are hidden texts. The
-  header can be a hidden text too."
-  [authorization]
-  (let [auth-pattern     #"(?i)\s*(basic|bearer)\s+(\S+)\s*"
-        [_ scheme value] (some->> (secret/reveal authorization)
-                                  (re-matches auth-pattern))]
-    (case (some-> scheme str/lower-case)
-      "basic"  (let [b       (bytes/from-base64 value)
-                     decoded (some-> b (bytes/decode 0 (bytes/length b) :utf8))
-                     i       (some-> decoded (str/index-of ":"))]
-                 (when i
-                   {:username (subs decoded 0 i)
-                    :password (secret/hide (subs decoded (inc i)))}))
-      "bearer" {:token (secret/hide value)}
-      nil)))
-
 (defn revealed
   "The `request` with the text of each hidden header and of a hidden body,
   as the server needs them.
@@ -104,7 +82,7 @@
     headers                   (update :headers update-vals secret/reveal)
     (contains? request :body) (update :body secret/reveal)))
 
-(defn ^:no-doc header
+(defn header
   "The first value of `header-name` in the response headers map `headers`,
   whose values are strings or vectors of them."
   [headers header-name]
@@ -227,9 +205,8 @@
   server and a wrong time zone don't matter (RFC 9111, section 4.2.1).
   Without a Date, a date counts from `at`.
 
-  The instant is at most :max-wait-seconds after `at`, an hour by default,
-  since a document can change within a freshness of days, and a server
-  that's set up wrong mustn't hold back the polling.
+  With :max-wait-seconds, the instant is at most that long after `at`,
+  e.g. so that a server that's set up wrong can't hold back a poller.
 
   The `headers` map lower-case names to a value or a vector of values. A
   Retry-After that doesn't read counts as none. The values of all the
@@ -238,13 +215,14 @@
   ([headers at]
    (not-before headers at {}))
   ([headers at {:keys [max-wait-seconds] :as opts}]
-   (let [arrived  (inst-ms at)
-         served   (date/epoch-ms (header headers "date"))
-         until    (or (retry-after headers arrived served)
-                      (fresh-until headers arrived served))
-         max-wait (* 1000 (or max-wait-seconds 3600))]
+   (let [arrived (inst-ms at)
+         served  (date/epoch-ms (header headers "date"))
+         until   (or (retry-after headers arrived served)
+                     (fresh-until headers arrived served))]
      (when (and until (> until arrived))
-       (instant (min until (+ arrived max-wait)))))))
+       (instant (cond-> until
+                  max-wait-seconds (min (+ arrived
+                                           (* 1000 max-wait-seconds)))))))))
 
 #?(:clj
    (defonce ^{:no-doc true
@@ -475,9 +453,9 @@
                                          (str body))))))
            (.build)))))
 
-(defn ^:no-doc timeout?
+(defn timeout?
   "Whether the exception `e` of a request, or one of its causes, is a
-  timeout."
+  timeout: ::timeout, or the timeout of the platform's client."
   [e]
   (let [cause  #?(:clj ex-cause :cljs #(.-cause %))
         causes (take-while some? (iterate cause e))]
@@ -614,14 +592,14 @@
 
 (defn- request-headers
   "The `headers` of a request for the bytes `range`, with the Range header,
-  and with user-agent unless they name another or the browser sends its
-  own.
+  and with the User-Agent `agent` unless they name another or the browser
+  sends its own.
 
   On the JVM, a request for a range asks for bytes that aren't gzipped,
   so that the offsets are those of the file."
-  [headers range]
-  (cond-> (merge #?(:clj  {"User-Agent" user-agent}
-                    :cljs (when-not browser? {"User-Agent" user-agent}))
+  [headers range agent]
+  (cond-> (merge #?(:clj  {"User-Agent" agent}
+                    :cljs (when-not browser? {"User-Agent" agent}))
                  headers)
     range (assoc "Range" (str "bytes=" (first range) "-" (second range)))
     #?@(:clj [range (assoc "Accept-Encoding" "identity")])))
@@ -760,6 +738,8 @@
   - :range, a pair of the first and the last byte to ask for, as RFC
     9110, section 14.1.2, has it. A nil last byte asks for the rest.
   - :allow-pred, a predicate of a URL, as url/public? is
+  - :user-agent, the User-Agent unless the :headers name one, user-agent
+    by default
 
   An exchange that goes beyond a limit throws ::timeout or ::too-large.
   On the JVM, the client of the JDK throws its HttpTimeoutException while
@@ -786,15 +766,17 @@
   page read an answer from another site only as far as the CORS headers
   of the answer allow. It hides the headers that the answer doesn't
   expose, e.g. Content-Range and ETag, and :filtered? marks such an
-  answer. Outside a browser, e.g. in Node, the request has user-agent as
-  its User-Agent, unless the :headers name another."
+  answer. A browser also sends its own User-Agent, so :user-agent counts
+  only outside one, e.g. in Node."
   [{:keys [method headers timeout-seconds allow-pred]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
   (let [method  (some-> method name str/lower-case keyword)
+        agent   (or (:user-agent request) user-agent)
+        headers (request-headers headers (:range request) agent)
         request (assoc (merge {:max-bytes default-max-bytes} request)
                        :method  method
-                       :headers (request-headers headers (:range request)))]
+                       :headers headers)]
     #?(:clj  (let [deadline         (+ (System/currentTimeMillis)
                                        (* 1000 timeout-seconds))
                    [response chain] (send-following! request deadline
@@ -824,10 +806,17 @@
   [request]
   (send! (assoc request :allow-pred url/public?)))
 
-(def ^:no-doc limit-keys
-  "The keys of a request that limit how it's sent, which the functions
-  that send take from their options."
-  [:timeout-seconds :max-bytes :allow-pred])
+(def ^:no-doc option-keys
+  "The keys of a request that say how it's sent, which the functions that
+  send take from their options."
+  [:timeout-seconds :max-bytes :allow-pred :user-agent])
+
+(defn with-options
+  "The `request` with the :timeout-seconds, :max-bytes, :allow-pred and
+  :user-agent that `opts` give, for a function that sends with the options
+  of send!."
+  [request opts]
+  (into request (remove (comp nil? val)) (select-keys opts option-keys)))
 
 (defn fetch-request
   "The request for the document at `url` with `opts`, the options of
@@ -837,19 +826,18 @@
   give none, and the request goes to the URL without them."
   ([url]
    (fetch-request url {}))
-  ([url {:keys [etag last-modified credentials user-agent accept]
-         :or   {user-agent dk.simongray.wary-fetch/user-agent
-                accept     "*/*"}
+  ([url {:keys [etag last-modified credentials accept]
+         :or   {accept "*/*"}
          :as   opts}]
    (let [[url in-url] (url/split-credentials url)
          auth         (authorization (or credentials in-url))]
-     (assoc (select-keys opts limit-keys)
-            :url     url
-            :headers (cond-> {"User-Agent" user-agent
-                              "Accept"     accept}
-                       etag          (assoc "If-None-Match" etag)
-                       last-modified (assoc "If-Modified-Since" last-modified)
-                       auth          (assoc "Authorization" auth))))))
+     (with-options
+      {:url     url
+       :headers (cond-> {"Accept" accept}
+                  etag          (assoc "If-None-Match" etag)
+                  last-modified (assoc "If-Modified-Since" last-modified)
+                  auth          (assoc "Authorization" auth))}
+      opts))))
 
 (defn fetch!
   "GET the document at `url` with `opts`, and give the response with the
@@ -864,9 +852,9 @@
     If-None-Match and If-Modified-Since, and a 304 then comes back with
     no body.
   - :credentials, as authorization takes them
-  - :user-agent, to send in place of user-agent
   - :accept, the Accept header, */* by default
-  - :timeout-seconds, :max-bytes and :allow-pred, as send! takes them
+  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
+    takes them
   - :max-wait-seconds, as not-before takes it
   - :send, the function that sends the request, send! by default"
   ([url]
@@ -896,7 +884,7 @@
      The `opts` are these:
 
      - :headers of the request
-     - :allow-pred, as send! takes it
+     - :allow-pred and :user-agent, as send! takes them
      - :timeout-seconds, the limit of the whole exchange, 600 by default"
      ([url algorithms]
       (digest! url algorithms {}))
@@ -909,7 +897,8 @@
             ;; throws
             digests        (into {} (for [a algorithms]
                                       [a (MessageDigest/getInstance a)]))
-            headers        (merge {"User-Agent"      user-agent
+            headers        (merge {"User-Agent"      (or (:user-agent opts)
+                                                         user-agent)
                                    "Accept-Encoding" "identity"}
                                   headers)
             request        {:url url :method :get :headers headers}
@@ -950,12 +939,6 @@
   [s]
   (some->> s (re-matches #"(?i)\s*bytes\s+\*/(\d{1,15})\s*") second parse-long))
 
-(defn ^:no-doc limited
-  "The `request` with :timeout-seconds, :max-bytes and :allow-pred from
-  `opts`, each when the opts give it."
-  [request opts]
-  (into request (remove (comp nil? val)) (select-keys opts limit-keys)))
-
 (defn ^:no-doc failed
   "The exception for the answer to a request for the file at `url` whose
   `status` is a failure."
@@ -982,7 +965,9 @@
 
   The `opts` are these:
 
-  - :headers, :timeout-seconds, :max-bytes and :allow-pred of the requests
+  - :headers of the requests
+  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
+    takes them
   - :send, a function that sends a request map in place of send!, as
     send! does"
   ([url]
@@ -994,7 +979,7 @@
                     :as      :bytes
                     :range   [start (dec end)]}]
        (async/then
-        (send (limited request opts))
+        (send (with-options request opts))
         (fn [{:keys [status body content-range] :as response}]
           (let [body (or body (bytes/of []))
                 h    #(header (:headers response) %)]
@@ -1075,17 +1060,17 @@
 (defn try-send!
   "Send the `request` with `send`, a function such as send!, and give a
   map of the response as the :value, or of the exception as the :error
-  where `send` throws. The `opts` are the :timeout-seconds, :max-bytes
-  and :allow-pred to put in the request.
+  where `send` throws. The `opts` are the :timeout-seconds, :max-bytes,
+  :allow-pred and :user-agent to put in the request.
 
   The map comes in a future on the JVM and in a promise in ClojureScript,
   so several requests can be under way at once."
   ([send request]
    (try-send! send request {}))
   ([send request opts]
-   (async/attempt #(send (limited request opts)))))
+   (async/attempt #(send (with-options request opts)))))
 
-(defn ^:no-doc failure
+(defn failure
   "The exception `e` of a request that failed, as data: its :reason, and
   the :type, :url and :status that it holds."
   [e]
@@ -1107,8 +1092,8 @@
 
   The result is a map of :head and :get, the facts of the answers to a
   HEAD request and to a request for the first two bytes. The facts of a
-  request that failed are a map of its :reason, and the :type, :url and
-  :status that its exception holds, under :error.
+  request that failed are its exception under :error, as failure gives
+  it.
 
   Most servers answer the second request with 206, and with the size of
   the whole file in Content-Range. A server that ignores ranges answers
@@ -1120,7 +1105,8 @@
   The `opts` are these:
 
   - :headers of the two requests, e.g. an Origin to learn about CORS
-  - :timeout-seconds, :max-bytes and :allow-pred of the requests
+  - :timeout-seconds, :max-bytes, :allow-pred and :user-agent, as send!
+    takes them
   - :send, a function that sends a request map in place of send!, as
     send! does"
   ([url]
@@ -1137,39 +1123,13 @@
                    (async/then (answer! range-request)
                                (fn [got] {:head head :get got})))))))
 
-(defn ^:no-doc body-bytes
-  "The bytes of the `body` of a Ring request, which is a string, bytes, a
-  stream or nothing. Nil when the body holds more than `max-bytes`, and
-  for a stream in ClojureScript."
-  [body max-bytes]
-  (let [b (cond
-            (nil? body)
-            (bytes/of [])
-
-            (string? body)
-            (bytes/encode body)
-
-            :else
-            #?(:clj  (if (bytes? body)
-                       body
-                       (.readNBytes ^InputStream body (int (inc max-bytes))))
-               :cljs (when (instance? js/Uint8Array body) body)))]
-    (when (and b (<= (bytes/length b) max-bytes))
-      b)))
-
-(defn ^:no-doc body-text
-  "The text of the `body` of a Ring request, read within `max-bytes`, of
-  UTF-8."
-  [body max-bytes]
-  (when-let [b (body-bytes body max-bytes)]
-    (bytes/decode b 0 (bytes/length b) :utf8)))
-
 (comment
   (authorization {:username "ann" :password "secret"})
   (byte-ranges "bytes=0-1023, 5000-")
 
   ;; an hour at most, though the server says a day
-  (not-before {"cache-control" "max-age=86400"} #inst "2026-09-29T12:00:00Z")
+  (not-before {"cache-control" "max-age=86400"} #inst "2026-09-29T12:00:00Z"
+              {:max-wait-seconds 3600})
 
   ;; a POST that a 303 turns into a GET, and credentials that stay behind
   (redirected {:method  :post

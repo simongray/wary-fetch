@@ -95,17 +95,22 @@ also have these keys:
 - `:timeout-seconds`, the limit of the whole exchange, 30 by default
 - `:max-bytes`, the limit of the body, 100 MB by default
 - `:allow-pred`, a predicate of the URL and of each redirect
+- `:user-agent`, the User-Agent, unless the headers name one
 - `:as :bytes`, for a body of bytes, e.g. of an image
 - `:range`, the first and the last byte to ask for
 
 An exchange that goes beyond a limit throws with the `:type`
-`:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`.
+`:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`,
+and `http/timeout?` also knows the timeouts of the platform's client.
 Use `http/send-public!` to send a request with `url/public?` as its
-`:allow-pred`, and `http/try-send!` to get an exception as data instead.
+`:allow-pred`, and `http/try-send!` to get the exception in a map instead
+of a throw. The `http/failure` function gives an exception as data.
 
-The `http/fetch!` function takes the same limits as options, along with
-`:credentials`, `:user-agent`, `:accept` and `:send`, a function to send
-the request in place of `http/send!`.
+The other functions that send, e.g. `http/fetch!`, take the limits,
+`:allow-pred` and `:user-agent` as options, and `http/with-options` puts
+them on a request of your own. The `http/fetch!` function also takes
+`:credentials`, `:accept` and `:send`, a function to send the request in
+place of `http/send!`.
 
 Credentials
 -----------
@@ -142,9 +147,9 @@ Retry-After or Cache-Control headers say how long to wait. The
 ;; => #inst "2026-10-10T12:10:00.000-00:00"
 ```
 
-The wait is at most an hour, unless the option `:max-wait-seconds` says
-otherwise, since a server that's set up wrong mustn't hold back your
-polling for days.
+The wait is as long as the server says. To poll a server that might be
+set up wrong, cap it with the option `:max-wait-seconds`, e.g. 3600 for
+an hour.
 
 Media files
 -----------

@@ -4,7 +4,6 @@
   (:require [clojure.test :refer [deftest is testing #?(:cljs async)]]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run #?(:clj with-file-server)]]
             [dk.simongray.wary-fetch.url :as url])
@@ -114,17 +113,6 @@
       (is (secret/hidden? (http/authorization {:username "u" :password "p"})))
       (is (= "#<secret>" (pr-str (http/authorization {:token "t"})))))))
 
-(deftest credentials-of-a-header
-  (let [read (fn [header] (some-> (http/credentials header) (update-vals secret/reveal)))]
-    (is (= {:username "ann" :password "secret"} (read "Basic YW5uOnNlY3JldA==")))
-    (is (= {:username "søren" :password "a:b:ø"} (read (http/authorization {:username "søren" :password "a:b:ø"})))
-        "what authorization writes, hidden, with UTF-8 and colons in the password")
-    (is (= {:username "" :password "p"} (read (str "basic " (http/base64 ":p")))) "any case of the scheme, and no user name")
-    (is (= {:token "abc.def"} (read "Bearer abc.def")))
-    (is (= "{:username \"ann\", :password #<secret>}" (pr-str (http/credentials "Basic YW5uOnNlY3JldA=="))))
-    (doseq [header [nil "" "Basic" "Basic !!!" "Basic YW5u" "Digest username=\"ann\""]]
-      (is (nil? (http/credentials header)) (pr-str header)))))
-
 (deftest a-request-for-another-client
   (let [request {:method  :post
                  :url     "https://example.org/x"
@@ -164,14 +152,15 @@
     (is (= {"If-None-Match" "\"v1\"" "If-Modified-Since" "Tue, 29 Sep 2026 10:00:00 GMT" "Authorization" "Basic dTpw"}
            (select-keys (:headers (http/revealed request)) ["If-None-Match" "If-Modified-Since" "Authorization"])))
     (is (= [100 false] [(:max-bytes request) (contains? request :max-pages)]) "only the options of send!")
-    (is (= {:url     "https://example.org/feed.xml"
-            :headers {"User-Agent" http/user-agent "Accept" "*/*"}}
+    (is (= {:url "https://example.org/feed.xml" :headers {"Accept" "*/*"}}
            (http/fetch-request "https://example.org/feed.xml"))
         "and without options, the plain request")
+    (is (= "Mine" (:user-agent (http/fetch-request "https://example.org/feed.xml" {:user-agent "Mine"})))
+        "the User-Agent, which send! puts in the headers")
     (is (= "application/rss+xml" (get-in (http/fetch-request "https://example.org/feed.xml" {:accept "application/rss+xml"})
                                          [:headers "Accept"])))))
 
-(deftest fetching-a-feed-through-a-send
+(deftest fetching-through-a-send
   (let [sent (atom nil)
         send (fn [request]
                (reset! sent request)
@@ -213,11 +202,12 @@
       (is (nil? (http/not-before {"cache-control" ["s-maxage=600"]} at)) "a shared cache's age is not ours")
       (is (nil? (http/not-before {"expires" ["Sun, 27 Sep 2026 11:30:00 GMT"]} at)))
       (is (nil? (http/not-before {} at))))
-    (is (= #inst "2026-09-27T13:00:00Z" (http/not-before {"retry-after" ["999999"]} at)))
-    (is (= #inst "2026-09-27T13:00:00Z" (http/not-before {"cache-control" ["public, max-age=424481"] "age" ["180318"]} at))
-        "at most an hour, since a document can change within the freshness it names")
-    (is (= #inst "2026-09-28T12:00:00Z" (http/not-before {"retry-after" ["86400"]} at {:max-wait-seconds 86400}))
+    (is (= #inst "2026-10-09T01:46:39Z" (http/not-before {"retry-after" ["999999"]} at))
+        "as late as the server says")
+    (is (= #inst "2026-09-27T13:00:00Z" (http/not-before {"retry-after" ["999999"]} at {:max-wait-seconds 3600}))
         "or at most the :max-wait-seconds of the options")
+    (is (= #inst "2026-09-27T13:00:00Z"
+           (http/not-before {"cache-control" ["public, max-age=424481"] "age" ["180318"]} at {:max-wait-seconds 3600})))
     (testing "a date with an offset, and one of a day that does not exist"
       (is (= #inst "2026-09-27T12:40:00Z" (http/not-before {"retry-after" ["Sun, 27 Sep 2026 14:40:00 +0200"]} at)))
       (is (nil? (http/not-before {"retry-after" ["Sun, 31 Sep 2026 12:40:00 GMT"]} at))))))
@@ -329,6 +319,29 @@
      (.close (.getRequestBody exchange))
      (.sendResponseHeaders exchange status -1)
      (.close exchange)))
+
+#?(:clj
+   (deftest the-user-agent
+     (let [server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+           base   (str "http://127.0.0.1:" (.getPort (.getAddress server)))
+           agent  #(:body (http/send! (assoc % :url base)))]
+       (.createContext server "/"
+                       (reify HttpHandler
+                         (handle [_ exchange]
+                           (let [headers (.getRequestHeaders exchange)
+                                 b       (.getBytes (str (.getFirst headers "User-Agent")) "UTF-8")]
+                             (.sendResponseHeaders exchange 200 (alength b))
+                             (with-open [out (.getResponseBody exchange)]
+                               (.write out b))))))
+       (.start server)
+       (try
+         (is (= http/user-agent (agent {})) "the library's by default")
+         (is (= "Mine" (agent {:user-agent "Mine"})))
+         (is (= "Theirs" (agent {:user-agent "Mine" :headers {"User-Agent" "Theirs"}}))
+             "a header before the option")
+         (is (= "Mine" (:body (http/fetch! base {:user-agent "Mine"}))) "an option of fetch! too")
+         (finally
+           (.stop server 0))))))
 
 #?(:clj
    (deftest following-redirects
@@ -536,25 +549,6 @@
   (is (= [{:href "x"}] (http/links {"link" "garbage, <>; rel, <x>; rel"})) "what is no link is left out")
   (is (= [] (http/links {})))
   (is (= [] (http/links {"link" (apply str (repeat 20000 "<"))})) "a long header of a stranger"))
-
-(deftest the-bytes-of-a-ring-request
-  (is (= 0 (bytes/length (http/body-bytes nil 10))))
-  (is (= [5 nil] [(bytes/length (http/body-bytes "hello" 5)) (http/body-bytes "hello!" 5)]))
-  (is (= 5 (bytes/length (http/body-bytes "Ærø" 5))) "the limit is in bytes")
-  (is (nil? (http/body-bytes "Ærø" 4)))
-  (is (= 3 (bytes/length (http/body-bytes (bytes/of [1 2 3]) 3))))
-  #?(:clj (is (= [3 nil]
-                 [(bytes/length (http/body-bytes (java.io.ByteArrayInputStream. (byte-array 3)) 3))
-                  (http/body-bytes (java.io.ByteArrayInputStream. (byte-array 4)) 3)])
-              "a stream, of which one byte more than the limit is read")))
-
-(deftest the-body-of-a-ring-request
-  (is (= "" (http/body-text nil 10)))
-  (is (= "hello" (http/body-text "hello" 5)))
-  (is (nil? (http/body-text "hello!" 5)) "more than the limit")
-  #?(:clj (let [stream #(java.io.ByteArrayInputStream. (.getBytes ^String % "UTF-8"))]
-            (is (= "Ærø" (http/body-text (stream "Ærø") 5)) "a stream, read as UTF-8, its limit in bytes")
-            (is (nil? (http/body-text (stream "Ærø") 4))))))
 
 #?(:clj
    (deftest refusing-hosts

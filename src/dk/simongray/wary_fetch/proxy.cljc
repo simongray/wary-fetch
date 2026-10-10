@@ -111,12 +111,12 @@
   (let [headers (header-names ring-request)]
     (cond
       ;; TODO: consider sending writes to hosts that the operator names, none
-      ;; by default, so that a page can sync over WebDAV and the gpodder API.
-      ;; That takes POST, PUT, DELETE, PROPFIND and MKCOL, the request body
-      ;; within :max-bytes, Authorization to those hosts only, Sec-Fetch-Site
-      ;; same-origin for every write, and the host check in :allow-pred, so that
-      ;; each redirect meets it. Hosts that listeners choose would make the
-      ;; proxy a relay of writes for every account.
+      ;; by default, e.g. so that a page can write to a WebDAV server. That
+      ;; takes the methods of writes, the request body within :max-bytes,
+      ;; Authorization to those hosts only, Sec-Fetch-Site same-origin for
+      ;; every write, and the host check in :allow-pred, so that each redirect
+      ;; meets it. Hosts that users choose would make the proxy a relay of
+      ;; writes for every account.
       (not (#{:get :head} request-method))
       (-> (answer 405 "http_request_denied" "The proxy answers GET and HEAD.")
           (assoc-in [:headers "Allow"] "GET, HEAD"))
@@ -145,19 +145,17 @@
   ([ring-request]
    (upstream-request ring-request {}))
   ([{:keys [request-method] :as ring-request} opts]
-   (let [{:keys [forward user-agent] :as opts} (merge defaults opts)
+   (let [{:keys [forward] :as opts} (merge defaults opts)
          {:strs [url as]} (target ring-request)
          headers          (header-names ring-request)
          [asked :as asks] (when (contains? forward "range")
                             (http/byte-ranges (get headers "range")))
-         forwarded        (select-keys headers (disj forward "range"))
-         sent-headers     (cond-> (assoc forwarded "Via" via)
-                            user-agent (assoc "User-Agent" user-agent))]
+         forwarded        (select-keys headers (disj forward "range"))]
      (when (url/web-url? url)
-       (cond-> (assoc (select-keys opts http/limit-keys)
-                      :method  request-method
-                      :url     url
-                      :headers sent-headers)
+       (cond-> (http/with-options {:method  request-method
+                                   :url     url
+                                   :headers (assoc forwarded "Via" via)}
+                                  opts)
          (= "bytes" as)     (assoc :as :bytes)
          (= 1 (count asks)) (assoc :range asked))))))
 
@@ -274,8 +272,8 @@
 
   The `base` is the URL of the route of the proxy, e.g. /proxy in a page.
   Each request goes with the :send of `opts`, http/send! by default. A
-  request that isn't http or https, e.g. for a Nostr relay, which a page
-  reaches by itself, goes to that :send as it is."
+  request whose URL isn't http or https, e.g. a WebSocket that a page opens
+  by itself, goes to that :send as it is."
   ([base]
    (sender base {}))
   ([base {:keys [send] :or {send http/send!} :as opts}]

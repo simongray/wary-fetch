@@ -1,6 +1,8 @@
 wary-fetch
 ==========
 
+[![Clojars Project](https://img.shields.io/clojars/v/dk.simongray/wary-fetch.svg)](https://clojars.org/dk.simongray/wary-fetch)
+
 This is a Clojure and ClojureScript library for fetching URLs that
 strangers give you, e.g. a feed URL that a user types in, or a link in a
 document you fetched. Requests and responses are plain maps.
@@ -26,9 +28,16 @@ There are no dependencies but Clojure.
 Getting started
 ---------------
 
-The library requires Clojure 1.11+ and Java 11+. Add it to the `:deps`
-in your `deps.edn` as a Git dependency, with the SHA of the latest
-commit on `master`:
+The library requires Clojure 1.11+ and Java 11+. For the latest release,
+add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
+`:deps` in your `deps.edn`:
+
+```clojure
+dk.simongray/wary-fetch {:mvn/version "0.1.0"}
+```
+
+For changes that aren't released yet, use the SHA of the latest commit on
+`master` instead:
 
 ```clojure
 dk.simongray/wary-fetch
@@ -36,8 +45,8 @@ dk.simongray/wary-fetch
  :git/sha "…"}
 ```
 
-For ClojureScript, also set `:deps true` in your `shadow-cljs.edn`, since
-shadow-cljs only reads Git dependencies from `deps.edn`.
+For ClojureScript, shadow-cljs only reads Git dependencies from
+`deps.edn`, so also set `:deps true` in your `shadow-cljs.edn`.
 
 Fetch a document with `http/fetch!`:
 

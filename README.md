@@ -33,7 +33,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.1.0"}
+dk.simongray/wary-fetch {:mvn/version "0.2.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -51,11 +51,10 @@ For ClojureScript, shadow-cljs only reads Git dependencies from
 Fetch a document with `http/fetch!`:
 
 ```clojure
-(require '[dk.simongray.wary-fetch :as http]
-         '[dk.simongray.wary-fetch.url :as url])
+(require '[dk.simongray.wary-fetch :as http])
 
 (def response
-  (http/fetch! "https://example.com/" {:allow-pred url/public?}))
+  (http/fetch! "https://example.com/"))
 
 (select-keys response [:status :url :last-modified])
 ;; => {:status        200
@@ -76,15 +75,18 @@ and a document that hasn't changed comes back as a 304 without a body:
 ;; => 304
 ```
 
-When the `:allow-pred` refuses a URL, no request goes out, and
+A URL on the network of the app or of its device gets no request, and
 `http/fetch!` throws an ex-info with the `:type`
-`:dk.simongray.wary-fetch/refused`:
+`:dk.simongray.wary-fetch/refused` instead:
 
 ```clojure
-(http/fetch! "http://169.254.169.254/latest/meta-data"
-             {:allow-pred url/public?})
+(http/fetch! "http://169.254.169.254/latest/meta-data")
 ;; throws "The request to http://169.254.169.254/latest/meta-data is not allowed"
 ```
+
+The check is the `:allow-pred` option, a predicate of the URL and of each
+redirect, which is `url/public?` unless you give another. To fetch from
+your own network, give one of your own, e.g. `(constantly true)`.
 
 Requests
 --------
@@ -112,9 +114,10 @@ of a throw. The `http/failure` function gives an exception as data.
 
 The functions that make a request for you, e.g. `http/fetch!`, take the
 limits, `:allow-pred` and `:user-agent` as options, and
-`http/with-options` puts them on a request of your own. The `http/fetch!`
-function also takes `:credentials` and `:accept`, and `:send` for a
-function that sends the request in place of `http/send!`.
+`http/with-options` puts them on a request of your own. Unlike
+`http/send!`, they take `url/public?` as the `:allow-pred` by default.
+The `http/fetch!` function also takes `:credentials` and `:accept`, and
+`:send` for a function that sends the request in place of `http/send!`.
 
 Credentials
 -----------

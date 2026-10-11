@@ -16,6 +16,11 @@
                    [java.security MessageDigest]
                    [java.util.zip GZIPOutputStream])))
 
+(def local
+  "The options of a request to a test server on this machine, which the
+  functions that fetch refuse by default."
+  {:allow-pred (constantly true)})
+
 (deftest facts-of-an-answer
   (is (= {:status 206 :url "https://b/e.mp3" :type "audio/mpeg" :length 2 :range {:start 0 :end 1 :total 1000}
           :etag "\"1\"" :cors "*" :permanent-url "https://b/e.mp3"
@@ -89,7 +94,7 @@
                     (js/Response. nil #js {:status 200 :headers #js {"content-type" "audio/mpeg" "content-length" "1000"}})
                     (js/Response. (js/Uint8Array. 2) #js {:status 206 :headers #js {"content-type" "audio/mpeg"
                                                                                      "content-range" "bytes 0-1/1000"}})))))
-         (-> (http/probe! "https://a/e.mp3")
+         (-> (http/probe! "https://a.example/e.mp3")
              (.then (fn [{:keys [head get]}]
                       (is (= [200 "audio/mpeg" 1000] ((juxt :status :type :length) head)))
                       (is (= [206 {:start 0 :end 1 :total 1000}] ((juxt :status :range) get)))
@@ -155,9 +160,11 @@
     (is (= {"If-None-Match" "\"v1\"" "If-Modified-Since" "Tue, 29 Sep 2026 10:00:00 GMT" "Authorization" "Basic dTpw"}
            (select-keys (:headers (http/revealed request)) ["If-None-Match" "If-Modified-Since" "Authorization"])))
     (is (= [100 false] [(:max-bytes request) (contains? request :max-pages)]) "only the options of send!")
-    (is (= {:url "https://example.org/feed.xml" :headers {"Accept" "*/*"}}
+    (is (= {:url "https://example.org/feed.xml" :headers {"Accept" "*/*"} :allow-pred url/public?}
            (http/fetch-request "https://example.org/feed.xml"))
-        "and without options, the plain request")
+        "and without options, the plain request, to the public internet only")
+    (is (= local (select-keys (http/fetch-request "https://example.org/feed.xml" local) [:allow-pred]))
+        "unless the options allow more")
     (is (= "Mine" (:user-agent (http/fetch-request "https://example.org/feed.xml" {:user-agent "Mine"})))
         "the User-Agent, which send! puts in the headers")
     (is (= "application/rss+xml" (get-in (http/fetch-request "https://example.org/feed.xml" {:accept "application/rss+xml"})
@@ -214,19 +221,30 @@
                      "/gone"     [404 {} (.getBytes "nope" "UTF-8")]}
          (fn [base]
            (testing "the body decoded by its charset, with the validator headers picked out"
-             (let [{:keys [status body etag]} (http/fetch! (str base "/feed.xml"))]
+             (let [{:keys [status body etag]} (http/fetch! (str base "/feed.xml") local)]
                (is (= 200 status))
                (is (= xml body))
                (is (= "\"v1\"" etag))))
            (testing "gzip is undone"
-             (is (= xml (:body (http/fetch! (str base "/feed.gz"))))))
+             (is (= xml (:body (http/fetch! (str base "/feed.gz") local)))))
            (testing "a body over :max-bytes is refused rather than read"
              (is (= ::http/too-large
-                    (try (http/fetch! (str base "/big.xml") {:max-bytes 1024}) nil
+                    (try (http/fetch! (str base "/big.xml") (assoc local :max-bytes 1024)) nil
                          (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
-             (is (= (* 2 1024 1024) (count (:body (http/fetch! (str base "/big.xml")))))))
+             (is (= (* 2 1024 1024) (count (:body (http/fetch! (str base "/big.xml") local))))))
            (testing "an error status still comes back as a map"
-             (is (= 404 (:status (http/fetch! (str base "/gone")))))))))))
+             (is (= 404 (:status (http/fetch! (str base "/gone") local)))))
+           (testing "a server on this machine, without an :allow-pred"
+             (is (= ::http/refused
+                    (try (http/fetch! (str base "/feed.xml")) nil
+                         (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
+             (is (= ::http/refused (get-in (http/probe! (str base "/feed.xml")) [:head :error :type])))
+             (is (= ::http/refused
+                    (try ((http/fetcher (str base "/feed.xml")) 0 10) nil
+                         (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
+             (is (= ::http/refused
+                    (try (http/digest! (str base "/feed.xml") ["SHA-256"]) nil
+                         (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))))))))
 
 #?(:clj
    (defn- with-servers
@@ -262,6 +280,13 @@
      (.close exchange)))
 
 #?(:clj
+   (deftest the-version-in-the-user-agent
+     (let [version #"\(def version\s+\"[^\"]*\"\s+\"([^\"]+)\""]
+       (is (= (str "wary-fetch/" (second (re-find version (slurp "build.clj"))))
+              http/user-agent)
+           "the version that build.clj releases"))))
+
+#?(:clj
    (deftest the-user-agent
      (let [server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
            base   (str "http://127.0.0.1:" (.getPort (.getAddress server)))
@@ -280,7 +305,7 @@
          (is (= "Mine" (agent {:user-agent "Mine"})))
          (is (= "Theirs" (agent {:user-agent "Mine" :headers {"User-Agent" "Theirs"}}))
              "a header before the option")
-         (is (= "Mine" (:body (http/fetch! base {:user-agent "Mine"}))) "an option of fetch! too")
+         (is (= "Mine" (:body (http/fetch! base (assoc local :user-agent "Mine")))) "an option of fetch! too")
          (finally
            (.stop server 0))))))
 
@@ -353,7 +378,9 @@
        (try
          (let [started (System/currentTimeMillis)]
            (is (= ::http/timeout
-                  (try (http/fetch! (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/") {:timeout-seconds 1}) nil
+                  (try (http/fetch! (str "http://127.0.0.1:" (.getPort (.getAddress server)) "/")
+                                    (assoc local :timeout-seconds 1))
+                       nil
                        (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
            (is (< (- (System/currentTimeMillis) started) 3000) "given up at the deadline, not when the body ends"))
          (finally
@@ -371,7 +398,7 @@
            (is (= 990 (count (:body (http/send! {:url url :as :bytes :range [10 nil]})))) "to the end")
            (testing "the digest of the whole file, streamed through"
              (is (= (seq (.digest (MessageDigest/getInstance "SHA-384") b))
-                    (seq (get-in (http/digest! url ["SHA-384"]) [:digests "SHA-384"])))))))
+                    (seq (get-in (http/digest! url ["SHA-384"] local) [:digests "SHA-384"])))))))
        (with-file-server b {:ranges? false}
          (fn [url]
            (let [{:keys [status body content-range]} (http/send! {:url url :as :bytes :range [10 19]})]
@@ -385,17 +412,18 @@
      (let [b (byte-array (map unchecked-byte (range 1000)))]
        (with-file-server b {}
          (fn [url]
-           (let [{:keys [head get]} (http/probe! url)]
+           (let [{:keys [head get]} (http/probe! url local)]
              (is (= [200 1000] ((juxt :status :length) head)))
              (is (= [206 {:start 0 :end 1 :total 1000}] ((juxt :status :range) get))))))
        (with-file-server b {:ranges? false}
          (fn [url]
-           (is (= [200 1000] ((juxt :status :length) (:get (http/probe! url))))
+           (is (= [200 1000] ((juxt :status :length) (:get (http/probe! url local))))
                "a server that sends the whole file, of which two bytes are read"))))
-     (let [closed (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s))]
-       (is (every? (comp string? :reason :error)
-                   (vals (http/probe! (str "http://127.0.0.1:" closed "/nothing"))))
-           "a port where no server listens, told by the reason"))))
+     (let [closed (with-open [s (java.net.ServerSocket. 0)] (.getLocalPort s))
+           probed (http/probe! (str "http://127.0.0.1:" closed "/nothing") local)]
+       (is (every? (comp string? :reason :error) (vals probed))
+           "a port where no server listens, told by the reason")
+       (is (not-any? (comp #{::http/refused} :type :error) (vals probed))))))
 
 #?(:clj
    (deftest more-than-was-asked
@@ -411,7 +439,8 @@
            (fn [base]
              (let [{:keys [status body]} (http/send! {:url (str base "/gone.mp3") :range [0 1] :max-bytes 1024})]
                (is (= [404 "xx"] [status body]) "of a page of 2 MB, the two bytes that the range names")
-               (is (= 404 (get-in (http/probe! (str base "/gone.mp3") {:max-bytes 1024}) [:get :status]))))))))))
+               (is (= 404 (get-in (http/probe! (str base "/gone.mp3") (assoc local :max-bytes 1024))
+                                  [:get :status]))))))))))
 
 #?(:clj
    (deftest an-algorithm-that-the-platform-lacks
@@ -437,7 +466,8 @@
                                 :as      :bytes
                                 :range   [5 14]
                                 :timeout-seconds 5
-                                :max-bytes       1000}
+                                :max-bytes       1000
+                                :allow-pred      url/public?}
                                @sent)
                             "the limits of time and size, which each request carries"))))))
 
@@ -445,7 +475,7 @@
    (deftest fetching-past-the-end
      (with-file-server (byte-array 1000) {}
        (fn [url]
-         (let [{:keys [bytes start total]} ((http/fetcher url {}) 2000 2100)]
+         (let [{:keys [bytes start total]} ((http/fetcher url local) 2000 2100)]
            (is (= [0 2000 1000] [(alength ^bytes bytes) start total])
                "a 416 gives no bytes and the size of the file"))))))
 

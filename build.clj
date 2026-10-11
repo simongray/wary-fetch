@@ -7,8 +7,9 @@
       clojure -T:build deploy    ; to Clojars, with CLOJARS_USERNAME and
                                  ; CLOJARS_PASSWORD (a deploy token) set
 
-  To release, bump the version below and in the README, and commit. Tag the
-  commit, e.g. as v0.1.0, and push both:
+  To release, bump the version below, in the README and in the user-agent
+  of the root namespace, and commit. Tag the commit, e.g. as v0.1.0, and
+  push both:
 
       git tag -a v0.1.0 -m 0.1.0
       git push origin master v0.1.0
@@ -30,7 +31,7 @@
 
 (def version
   "The version to build; bump it with each release on GitHub."
-  "0.1.0")
+  "0.2.0")
 
 (def class-dir
   "Where the jar's contents are staged."

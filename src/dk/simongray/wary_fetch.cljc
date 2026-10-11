@@ -15,10 +15,13 @@
             [dk.simongray.wary-fetch.url :as url])
   #?(:clj (:import [java.net.http HttpTimeoutException])))
 
+;; RFC 9110, section 10.1.5: a product and its version. The bot rules of
+;; hosts behind Cloudflare refuse a product without one, and some refuse a
+;; comment with a URL, as of 2026-10-11.
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch (+https://github.com/simongray/wary-fetch)")
+  "wary-fetch/0.2.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -154,6 +157,12 @@
   [request opts]
   (into request (remove (comp nil? val)) (select-keys opts option-keys)))
 
+(defn ^:no-doc public-by-default
+  "The `opts` of a function that fetches, with url/public? as the
+  :allow-pred unless they give another."
+  [opts]
+  (update opts :allow-pred #(or % url/public?)))
+
 (defn timeout?
   "Whether the exception `e` of a request, or one of its causes, is a
   timeout: ::timeout, or the timeout of the platform's client."
@@ -190,7 +199,8 @@
   fetch!.
 
   A user name and a password in `url` are the credentials when `opts`
-  give none, and the request goes to the URL without them."
+  give none, and the request goes to the URL without them. The request
+  goes only to the public internet unless `opts` give an :allow-pred."
   ([url]
    (fetch-request url {}))
   ([url {:keys [etag last-modified credentials accept]
@@ -204,7 +214,7 @@
                   etag          (assoc "If-None-Match" etag)
                   last-modified (assoc "If-Modified-Since" last-modified)
                   auth          (assoc "Authorization" auth))}
-      opts))))
+      (public-by-default opts)))))
 
 (defn- now
   "The instant now, by the clock of the platform."
@@ -227,7 +237,8 @@
   - :credentials, as authorization takes them
   - :accept, the Accept header, */* by default
   - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them
+    :user-agent, as send! takes them, but with url/public? as the
+    :allow-pred by default
   - :max-wait-seconds, as headers/not-before takes it
   - :send, the function that sends the request, send! by default"
   ([url]
@@ -259,12 +270,13 @@
      The `opts` are these:
 
      - :headers of the request
-     - :allow-pred and :user-agent, as send! takes them
+     - :allow-pred and :user-agent, as send! takes them, but with
+       url/public? as the :allow-pred by default
      - :timeout-seconds, the limit of the whole exchange, 600 by default"
      ([url algorithms]
       (digest! url algorithms {}))
      ([url algorithms {:keys [headers timeout-seconds allow-pred]
-                       :or   {timeout-seconds 600 allow-pred (constantly true)}
+                       :or   {timeout-seconds 600}
                        :as   opts}]
       (let [agent   (or (:user-agent opts) user-agent)
             request {:url     url
@@ -273,7 +285,7 @@
                                       "Accept-Encoding" "identity"}
                                      headers)}]
         (jvm/digests! (revealed request) algorithms timeout-seconds
-                      allow-pred)))))
+                      (or allow-pred url/public?))))))
 
 (defn- whole-size
   "The size of the file whose first `n` bytes came in a 200 to a request
@@ -321,7 +333,8 @@
 
   - :headers of the requests
   - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them
+    :user-agent, as send! takes them, but with url/public? as the
+    :allow-pred by default
   - :send, the function that sends each request, send! by default"
   ([url]
    (fetcher url {}))
@@ -332,7 +345,7 @@
                     :as      :bytes
                     :range   [start (dec end)]}]
        (async/then
-        (send (with-options request opts))
+        (send (with-options request (public-by-default opts)))
         (fn [{:keys [status body content-range] :as response}]
           (let [body (or body (bytes/of []))
                 h    #(headers/header (:headers response) %)]
@@ -415,13 +428,15 @@
 
   - :headers of both requests, e.g. an Origin to learn about CORS
   - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them
+    :user-agent, as send! takes them, but with url/public? as the
+    :allow-pred by default
   - :send, the function that sends each request, send! by default"
   ([url]
    (probe! url {}))
   ([url {:keys [headers send] :or {send send!} :as opts}]
    (let [answer!       (fn [request]
-                         (-> (try-send! send (assoc request :url url) opts)
+                         (-> (try-send! send (assoc request :url url)
+                                        (public-by-default opts))
                              (async/then sent-facts)))
          head-request  {:method  :head
                         :headers (merge {"Accept-Encoding" "identity"} headers)}

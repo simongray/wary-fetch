@@ -109,6 +109,9 @@
        (is (not (url/public? "https://a.example/")) "an address that doesn't read"))))
 
 (deftest names-of-the-public-internet
-  (is (every? url/public-name? ["podcastindex.org" "PodcastIndex.org." "a.b.example"]))
+  (is (every? url/public-name? ["podcastindex.org" "PodcastIndex.org." "a.b.example" "0x7f.example" "1.example"]))
   (is (not-any? url/public-name? ["localhost" "localhost." "nas" "nas.local" "NAS.Local." "wiki.internal"
-                                  "router.home.arpa" "x.localhost" "" nil])))
+                                  "router.home.arpa" "x.localhost" "" nil]))
+  (is (not-any? url/public-name? ["127.0.0.1" "10.0.0.1." "012.0.0.1" "0x7f.0.0.1" "0X7F.1" "127.1" "a.0x"
+                                  "example.09"])
+      "an IPv4 address in any form that a browser reads, as the last part is a number"))

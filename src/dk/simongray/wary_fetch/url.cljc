@@ -476,17 +476,20 @@
             (ipv6 (or bracketed bare)))))))
 
 ;; RFC 6761, section 6.3 (localhost); RFC 6762, section 3 (.local);
-;; RFC 8375 (.home.arpa)
+;; RFC 8375 (.home.arpa); URL Standard, section 3.5, the ends in a number
+;; checker, of 2026-10-07
 (defn public-name?
   "Whether the domain name `host` is a name of the public internet.
 
   Such a name has a dot in it, not counting a dot at its end. It also
   doesn't stay on a local network, as localhost, .local, .internal and
-  .home.arpa do."
+  .home.arpa do. A host whose last part is a number isn't a name but an
+  IPv4 address, as a browser reads it, e.g. 10.0.0.1 or 0x7f.0.0.1."
   [host]
   (let [h (str/replace (str/lower-case (str host)) #"\.$" "")]
     (and (str/includes? h ".")
-         (not (re-find #"(^|\.)(localhost|local|internal|home\.arpa)$" h)))))
+         (not (re-find #"(^|\.)(localhost|local|internal|home\.arpa)$" h))
+         (not (re-find #"(^|\.)(\d+|0x[0-9a-f]*)$" h)))))
 
 #?(:cljs
    (def ^:dynamic ^:no-doc *addresses*

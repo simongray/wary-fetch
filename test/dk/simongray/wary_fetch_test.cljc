@@ -481,13 +481,21 @@
 #?(:clj
    (deftest requests-that-reach-no-server
      (let [kind   #(try (%) nil (catch clojure.lang.ExceptionInfo e (http/failure e)))
-           ;; a server that answers anything in plain HTTP, as most do
+           ;; a server that answers anything in plain HTTP, as most do. It
+           ;; reads before it answers, and waits for the client to hang up,
+           ;; since a close with unread data resets the connection, and on
+           ;; Linux the reset can drop the answer before the client reads it
            server (java.net.ServerSocket. 0 50 (java.net.InetAddress/getByName "127.0.0.1"))
            answer (future (with-open [s (.accept server)]
-                            (doto (.getOutputStream s)
-                              (.write (.getBytes "HTTP/1.1 400 Bad Request\r\n\r\n" "UTF-8"))
-                              (.flush))
-                            (Thread/sleep 500)))]
+                            (let [in (.getInputStream s)]
+                              (.setSoTimeout s 5000)
+                              (.read in)
+                              (doto (.getOutputStream s)
+                                (.write (.getBytes "HTTP/1.1 400 Bad Request\r\n\r\n" "UTF-8"))
+                                (.flush))
+                              (try
+                                (while (not= -1 (.read in (byte-array 4096))))
+                                (catch java.io.IOException _)))))]
        (try
          (let [tls (kind #(http/send! {:url (str "https://127.0.0.1:" (.getLocalPort server) "/")
                                        :allow-pred (constantly true)}))]

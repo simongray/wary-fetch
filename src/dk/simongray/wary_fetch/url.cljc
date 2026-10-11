@@ -87,6 +87,14 @@
       (str url)
       (str base joint query fragment))))
 
+(defn without-trailing-slashes
+  "The `url` without the slashes at its end, e.g. the root of an API that
+  paths are joined to, in a time that grows with its length alone."
+  [url]
+  ;; a match may start only where a run of slashes starts: /+$ alone is
+  ;; tried again from every slash of a long run, quadratically
+  (str/replace (str url) #"(^|[^/])/+$" "$1"))
+
 (defn split-credentials
   "The `url` without the user name and the password that it holds, and
   those as credentials for authorization, as a pair. The credentials are

@@ -61,6 +61,14 @@
   (is (= ["https" "javascript" "mailto" nil nil]
          (map url/scheme ["HTTPS://a.example/" " java\tscript:alert(1)" "mailto:a@b.example" "/feed.xml" nil]))))
 
+(deftest trailing-slashes
+  (is (= ["https://a.example/api" "https://a.example/api" "https://a.example" "" "" "a/b"]
+         (map url/without-trailing-slashes
+              ["https://a.example/api/" "https://a.example/api///" "https://a.example" "///" nil "a/b"])))
+  (testing "a long run of slashes, in linear time"
+    (let [slashes (apply str (repeat 100000 "/"))]
+      (is (= "https://a.example/a" (url/without-trailing-slashes (str "https://a.example/a" slashes)))))))
+
 (deftest parameters-of-a-query
   (is (= "https://a.example/feed.xml?page=2" (url/with-query "https://a.example/feed.xml" {:page 2})))
   (is (= "https://a.example/feed.xml?x=1&page=2&token=a%20b#top"

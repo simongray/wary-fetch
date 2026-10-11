@@ -21,7 +21,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.2.0")
+  "wary-fetch/0.3.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -106,11 +106,17 @@
     name one
   - :max-redirects, how many redirects to follow (5 by default, and 0 for
     none)
+  - :sink, to take the body of a success in pieces rather than hold it,
+    e.g. to write a large file: a function of the bytes of each piece,
+    which in ClojureScript can give a promise to wait for, an
+    OutputStream on the JVM, or a writable stream in Node
 
   The response is a map of :status, the final :url, :headers and :body.
   The body has gzip undone and text decoded by its charset. A 206 also
   has the :content-range as a map of :start, :end and :total. In a
-  browser, :filtered? marks a response whose headers CORS hides.
+  browser, :filtered? marks a response whose headers CORS hides. With a
+  :sink, a response of status 200 to 299 has no :body but the number of
+  bytes that the sink :received, within the same limits.
 
   Outside a browser it follows the redirects itself and asks :allow-pred
   about each. It never follows one from https to http, and credentials
@@ -120,7 +126,12 @@
   gives a redirect as a response with the status 0.
 
   It throws ::timeout or ::too-large past a limit and ::refused when
-  :allow-pred refuses a URL."
+  :allow-pred refuses a URL. A request that reaches no server throws
+  ::unresolved when the name of the host doesn't resolve, ::unreachable
+  when the host can't be reached and ::tls when the secure connection
+  fails, e.g. over an expired certificate. A browser tells none of these
+  apart, but gives ::unreachable when it knows that the device is
+  offline."
   [{:keys [method headers timeout-seconds allow-pred]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
@@ -176,10 +187,13 @@
 
 (defn failure
   "The exception `e` of a request that failed, as data: its :reason, and
-  the :type, :url and :status that it holds."
+  the :type, :url and :status that it holds. The reason of a typed
+  exception is its own message, written for a person, and else it has the
+  messages of the causes."
   [e]
-  (into {:reason (async/explain e)}
-        (select-keys (ex-data e) [:type :url :status])))
+  (let [data (ex-data e)]
+    (into {:reason (if (:type data) (ex-message e) (async/explain e))}
+          (select-keys data [:type :url :status]))))
 
 (defn try-send!
   "Send the `request` with `send`, a function such as send!, and give a

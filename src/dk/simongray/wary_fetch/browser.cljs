@@ -56,10 +56,41 @@
                                    (+ got (.-length chunk)))))))))]
       (js/Promise.resolve (step [] 0)))))
 
+(defn- pour-body
+  "A promise of how many bytes of the body of the fetch response `res` from
+  `url` went to `sink`, a function of each piece that can give a promise to
+  wait for: the first `n` of them, the rest left unread, or with nil `n`
+  the whole body, rejected with ::too-large once more than `max-bytes`
+  arrive."
+  [^js res url n max-bytes sink]
+  (let [reader (.getReader (.-body res))
+        cancel #(.catch (.cancel reader) (fn [_] nil))]
+    (letfn [(step [got]
+              (.then (.read reader)
+                     (fn [^js r]
+                       (if (.-done r)
+                         got
+                         (let [chunk (.-value r)
+                               room  (if n (- n got) ##Inf)
+                               piece (if (< room (.-length chunk))
+                                       (.subarray chunk 0 room)
+                                       chunk)
+                               sum   (+ got (.-length piece))]
+                           (if (and (nil? n) max-bytes (> sum max-bytes))
+                             (do (cancel)
+                                 (throw (limits/too-large url max-bytes)))
+                             (.then (js/Promise.resolve (sink piece))
+                                    (fn [_]
+                                      (if (and n (>= sum n))
+                                        (do (cancel) sum)
+                                        (step sum))))))))))]
+      (step 0))))
+
 (defn- answer
   "A promise of the response map for the fetch response `res` to the
-  `request`."
-  [^js res {:keys [method url as range max-bytes] :as request}]
+  `request`. The body of a success goes to the :sink of the request, when
+  it has one."
+  [^js res {:keys [method url as range max-bytes sink] :as request}]
   (let [status   (.-status res)
         received (headers/content-range (.get (.-headers res) "content-range"))
         headers  (into {}
@@ -73,8 +104,15 @@
         ;; fetch undoes gzip itself, so a prefix is one of the file
         n        (limits/prefix-length status (:start received) false range
                                        max-bytes)]
-    (if (or (= :head method) (nil? (.-body res)))
+    (cond
+      (or (= :head method) (nil? (.-body res)))
       response
+
+      (and sink (<= 200 status 299))
+      (.then (pour-body res url n max-bytes sink)
+             #(assoc response :received %))
+
+      :else
       (.then (read-body res url (if n {:first n} {:max-bytes max-bytes}))
              (fn [b]
                (cond-> response
@@ -83,6 +121,15 @@
                         (if (= :bytes as)
                           b
                           (encoding/decode b (headers/charset headers))))))))))
+
+(defn- offline?
+  "Whether the fetch failed with `e` since the device is offline. Fetch
+  says nothing more of why a request failed, but the browser knows when
+  it has no network."
+  [e]
+  (and (instance? js/TypeError e)
+       (exists? js/navigator)
+       (false? (.-onLine js/navigator))))
 
 (defn send!
   "A promise of the response to `request`, sent with fetch within
@@ -99,4 +146,5 @@
                    (some? body)        (assoc :body body)
                    (= 0 max-redirects) (assoc :redirect "manual"))]
       (-> (js/fetch url (clj->js init))
+          (.catch #(throw (if (offline? %) (limits/unreachable url %) %)))
           (.then #(answer % request))))))

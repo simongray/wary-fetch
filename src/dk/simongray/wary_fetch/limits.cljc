@@ -1,7 +1,7 @@
 (ns ^:no-doc dk.simongray.wary-fetch.limits
   "The limits of an exchange, which every client keeps: where a request may
   go, how long it may take and how much of a body it reads, and the
-  exceptions of the requests that go beyond them."
+  exceptions of the requests that go beyond them or never reach a server."
   (:require [dk.simongray.wary-fetch :as-alias http]))
 
 (def default-max-bytes
@@ -27,6 +27,32 @@
   [url]
   (ex-info (str "The request did not end in time: " url)
            {:type ::http/timeout :url url}))
+
+(defn unresolved
+  "The exception of a request to `url` whose host name doesn't resolve,
+  with the `cause` that the platform gave, or nil."
+  [url cause]
+  (ex-info (str "The host of " url " was not found")
+           {:type ::http/unresolved :url url}
+           cause))
+
+(defn unreachable
+  "The exception of a request to `url` whose host couldn't be reached, with
+  the `cause` that the platform gave."
+  [url cause]
+  (ex-info (str "The host of " url " could not be reached")
+           {:type ::http/unreachable :url url}
+           cause))
+
+(defn tls-failure
+  "The exception of a request to `url` whose secure connection failed, with
+  the `cause` that the platform gave and its `reason`, e.g. an expired
+  certificate."
+  [url cause reason]
+  (ex-info (str "The secure connection to " url " failed"
+                (when reason (str ": " reason)))
+           {:type ::http/tls :url url}
+           cause))
 
 (defn prefix-length
   "How much of the body of an answer of `status` to read for a request of

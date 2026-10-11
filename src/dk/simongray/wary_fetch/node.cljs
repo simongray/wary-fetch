@@ -164,6 +164,63 @@
             #(finish reject (or @fate
                                 (js/Error. "The answer ended early"))))))))
 
+(defn- given!
+  "Give the `piece` of a body to `sink`, a function of each piece or a
+  writable stream, and give what to wait for before the next piece: the
+  promise that the function gives, or the drain of a full stream."
+  [sink piece]
+  (if (fn? sink)
+    (sink piece)
+    (when-not (.write ^js sink piece)
+      (js/Promise. (fn [resolve] (.once ^js sink "drain" resolve))))))
+
+(defn pour!
+  "A promise of how many bytes of the body of the `answer` that open! gave
+  went to `sink`, as given! gives them, with gzip undone when it's
+  `gzipped?`: the first `n` of them, the rest left unread, or with nil `n`
+  the whole body. Once more than `max-bytes` arrive, it rejects with what
+  `too-large` gives."
+  [{:keys [^js response timer fate]} n max-bytes gzipped? sink too-large]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [^js source (if gzipped?
+                        (.pipe response (.createGunzip (module "node:zlib")))
+                        response)
+           total      (volatile! 0)
+           done       (volatile! false)
+           finish     (fn [f x]
+                        (when-not @done
+                          (vreset! done true)
+                          (js/clearTimeout timer)
+                          (f x)))
+           stop       (fn [f x]
+                        (finish f x)
+                        (.destroy response))]
+       (.on source "data"
+            (fn [^js chunk]
+              (.pause source)
+              (let [room  (if n (- n @total) ##Inf)
+                    piece (if (< room (.-length chunk))
+                            (.subarray chunk 0 room)
+                            chunk)
+                    sum   (vswap! total + (.-length piece))]
+                (if (and (nil? n) max-bytes (> sum max-bytes))
+                  (stop reject (too-large))
+                  (.then (js/Promise.resolve (given! sink piece))
+                         (fn [_]
+                           (if (and n (>= sum n))
+                             (stop resolve sum)
+                             (.resume source)))
+                         #(stop reject %))))))
+       (.on source "end" #(finish resolve @total))
+       (.on source "error" #(finish reject (or @fate %)))
+       (.on response "error" #(finish reject (or @fate %)))
+       ;; the gunzip ends after the answer closes
+       (when-not gzipped?
+         (.on response "close"
+              #(finish reject (or @fate
+                                  (js/Error. "The answer ended early")))))))))
+
 (defn gunzip
   "The gzipped bytes `b` inflated, or nil when they'd be more than
   `max-bytes`, which is no limit when it's nil."
@@ -199,6 +256,33 @@
       (.then (js/Promise.resolve nil) ask)
       (.then (lookup! host deadline #(limits/late url)) ask))))
 
+(defn- connect-failure
+  "The exception of the request to `url` that failed with `e` before an
+  answer: typed when the code of `e` says that the name didn't resolve,
+  that the host couldn't be reached or that the secure connection failed,
+  and else `e`."
+  [url ^js e]
+  (let [code (str (some-> e .-code))]
+    (cond
+      (contains? #{"ENOTFOUND" "EAI_AGAIN" "EAI_NONAME" "EAI_NODATA"
+                   "EAI_FAIL"}
+                 code)
+      (limits/unresolved url e)
+
+      (contains? #{"ECONNREFUSED" "EHOSTUNREACH" "ENETUNREACH" "ENETDOWN"
+                   "EHOSTDOWN" "EADDRNOTAVAIL" "ETIMEDOUT"}
+                 code)
+      (limits/unreachable url e)
+
+      (or (re-find #"^(ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_)" code)
+          (contains? #{"EPROTO" "DEPTH_ZERO_SELF_SIGNED_CERT"
+                       "SELF_SIGNED_CERT_IN_CHAIN" "HOSTNAME_MISMATCH"}
+                     code))
+      (limits/tls-failure url e (.-message e))
+
+      :else
+      e)))
+
 (defn- send-following!
   "A promise of the answer to `request` before its body is read, the
   redirects before it and the last request, as a vector. It follows the
@@ -208,6 +292,7 @@
   (letfn [(step [{:keys [url] :as request} chain]
             (-> (checked! url allow-pred deadline)
                 (.then #(open! request % deadline (fn [] (limits/late url))))
+                (.catch #(throw (connect-failure url %)))
                 (.then (fn [{:keys [status headers] :as opened}]
                          (let [location (headers/header headers "location")
                                limit    (:max-redirects request
@@ -226,38 +311,43 @@
 
 (defn- answer
   "A promise of the response map for the answer that node:http `opened`
-  for the `request`, which came after the redirects `chain`."
+  for the `request`, which came after the redirects `chain`. The body of a
+  success goes to the :sink of the request, when it has one."
   [{:keys [status headers] :as opened} chain
-   {:keys [method url as range max-bytes] :as request}]
+   {:keys [method url as range max-bytes sink] :as request}]
   (let [received (headers/content-range (headers/header headers
                                                         "content-range"))
         gzipped  (headers/gzipped? headers)
         n        (limits/prefix-length status (:start received) gzipped range
                                        max-bytes)
         moved    (redirect/permanent-url chain url)
+        sunk?    (and sink (not= :head method) (<= 200 status 299))
         inflate  (fn [b]
                    (if gzipped
                      (or (gunzip b max-bytes)
                          (throw (limits/too-large url max-bytes)))
-                     b))]
+                     b))
+        too-big  #(limits/too-large url max-bytes)]
     (-> (cond
           ;; an answer to HEAD has no content by RFC 9110, section 9.3.2
           (= :head method) (do (close! opened)
                                (js/Promise.resolve (js/Uint8Array. 0)))
+          sunk?            (pour! opened n max-bytes gzipped sink too-big)
           n                (read! opened n nil nil)
-          :else            (read! opened nil max-bytes
-                                  #(limits/too-large url max-bytes)))
+          :else            (read! opened nil max-bytes too-big))
         (.then (fn [b]
                  (cond-> {:status  status
                           :url     url
                           :headers headers
-                          :body    (when (and (not= 304 status)
+                          :body    (when (and (not sunk?)
+                                              (not= 304 status)
                                               (pos? (.-length b)))
                                      (if (= :bytes as)
                                        (inflate b)
                                        (encoding/decode
                                         (inflate b)
                                         (headers/charset headers))))}
+                   sunk?       (assoc :received b)
                    moved       (assoc :permanent-url moved)
                    (seq chain) (assoc :redirects chain)
                    received    (assoc :content-range received)))))))

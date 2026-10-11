@@ -33,7 +33,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.2.0"}
+dk.simongray/wary-fetch {:mvn/version "0.3.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -102,11 +102,21 @@ also have these keys:
 - `:user-agent`, the User-Agent, unless the headers name one
 - `:as :bytes`, for a body of bytes, e.g. of an image
 - `:range`, the first and the last byte to ask for
+- `:sink`, to take the body of a success in pieces, see [Media
+  files](#media-files)
 
 An exchange that goes beyond a limit throws with the `:type`
 `:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`.
 To tell whether an exception is a timeout, including one from the
 platform's own client, use `http/timeout?`.
+
+A request that reaches no server throws with the `:type` `unresolved`
+when the name of the host doesn't resolve, `unreachable` when the host
+can't be reached and `tls` when the secure connection fails, all in the
+`dk.simongray.wary-fetch` namespace. So you can tell a dead network from
+a dead server, and a dead server from a bad certificate. A browser
+doesn't say why a request failed, but when it knows that the device is
+offline, the type is `unreachable`.
 
 Use `http/send-public!` to send a request with `url/public?` as its
 `:allow-pred`, and `http/try-send!` to get the exception in a map instead
@@ -181,6 +191,28 @@ which sends a HEAD request and a request for the first two bytes:
 ;;            :range  {:start 0 :end 1 :total 104793}
 ;;            …}}
 ```
+
+To download a file without holding it in memory, give the request a
+`:sink`: a function of the bytes of each piece, an OutputStream on the
+JVM, or a writable stream in Node. In ClojureScript, the function can
+give a promise, and the next piece waits for it. The response then has
+no `:body`, but the number of bytes the sink `:received`:
+
+```clojure
+(require '[clojure.java.io :as io])
+
+(with-open [out (io/output-stream "Example.ogg")]
+  (:received
+   (http/send-public!
+    {:url       "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
+     :sink      out
+     :max-bytes nil})))
+;; => 104793
+```
+
+The limits apply to the sink too, so give `:max-bytes nil` for a file
+that can be larger than 100 MB. Only the body of a success goes to the
+sink, and a 404 gives its page as the `:body`, as usual.
 
 Use `http/fetcher` to read a file in parts by byte range, and, on the
 JVM, `http/digest!` to get a SHA-256 or other digest of a file as it

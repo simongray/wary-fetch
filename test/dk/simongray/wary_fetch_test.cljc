@@ -408,6 +408,71 @@
            (is (= 1000 (count (:body (http/send! {:url url :as :bytes :range [10 nil]})))) "all of it for the rest"))))))
 
 #?(:clj
+   (deftest a-body-into-a-sink
+     (let [b      (byte-array (map unchecked-byte (range 200000)))
+           pieces (atom [])
+           sink   #(swap! pieces conj %)
+           joined #(byte-array (mapcat seq @pieces))]
+       (with-server {"/file" [200 {} b]
+                     "/gz"   [200 {"Content-Encoding" "gzip"} (gzip b)]
+                     "/gone" [404 {} (.getBytes "nope" "UTF-8")]}
+         (fn [base]
+           (testing "the body in pieces, of which the response holds none"
+             (let [{:keys [status body received]} (http/send! {:url (str base "/file") :sink sink})]
+               (is (= [200 nil 200000] [status body received]))
+               (is (< 1 (count @pieces)))
+               (is (= (seq b) (seq (joined))))))
+           (testing "into an OutputStream"
+             (let [out (ByteArrayOutputStream.)]
+               (is (= 200000 (:received (http/send! {:url (str base "/file") :sink out}))))
+               (is (= (seq b) (seq (.toByteArray out))))))
+           (testing "with gzip undone"
+             (reset! pieces [])
+             (is (= 200000 (:received (http/send! {:url (str base "/gz") :sink sink}))))
+             (is (= (seq b) (seq (joined)))))
+           (testing "within the limit of the body"
+             (is (= ::http/too-large
+                    (try (http/send! {:url (str base "/file") :sink sink :max-bytes 1000}) nil
+                         (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))))
+             (is (= 200000 (:received (http/send! {:url (str base "/file") :sink sink :max-bytes nil})))
+                 "or without one"))
+           (testing "but the body of a failure in the response"
+             (reset! pieces [])
+             (is (= [404 "nope" nil] ((juxt :status :body :received) (http/send! {:url (str base "/gone") :sink sink}))))
+             (is (empty? @pieces)))))
+       (with-file-server b {}
+         (fn [url]
+           (reset! pieces [])
+           (is (= 100 (:received (http/send! {:url url :range [1000 1099] :sink sink}))))
+           (is (= (seq (java.util.Arrays/copyOfRange b 1000 1100)) (seq (joined))) "no more than the range"))))))
+
+#?(:clj
+   (deftest requests-that-reach-no-server
+     (let [kind   #(try (%) nil (catch clojure.lang.ExceptionInfo e (http/failure e)))
+           ;; a server that answers anything in plain HTTP, as most do
+           server (java.net.ServerSocket. 0 50 (java.net.InetAddress/getByName "127.0.0.1"))
+           answer (future (with-open [s (.accept server)]
+                            (doto (.getOutputStream s)
+                              (.write (.getBytes "HTTP/1.1 400 Bad Request\r\n\r\n" "UTF-8"))
+                              (.flush))
+                            (Thread/sleep 500)))]
+       (try
+         (let [tls (kind #(http/send! {:url (str "https://127.0.0.1:" (.getLocalPort server) "/")
+                                       :allow-pred (constantly true)}))]
+           (is (= ::http/tls (:type tls)) "a secure connection to a server that doesn't speak TLS")
+           (is (re-find #"^The secure connection to https://127\.0\.0\.1:\d+/ failed: " (:reason tls))))
+         (finally
+           (future-cancel answer)
+           (.close server)))
+       (is (= {:type ::http/unreachable :url "http://127.0.0.1:1/" :reason "The host of http://127.0.0.1:1/ could not be reached"}
+              (kind #(http/send! {:url "http://127.0.0.1:1/" :allow-pred (constantly true)})))
+           "a port where nothing listens")
+       (is (= ::http/unresolved (:type (kind #(http/send! {:url "http://no-such-host.invalid/" :allow-pred (constantly true)}))))
+           "a name that doesn't resolve")
+       (is (= ::http/unresolved (:type (kind #(http/fetch! "http://no-such-host.invalid/"))))
+           "also when url/public? refuses it, as it refuses a name that doesn't resolve"))))
+
+#?(:clj
    (deftest probing-a-file
      (let [b (byte-array (map unchecked-byte (range 1000)))]
        (with-file-server b {}

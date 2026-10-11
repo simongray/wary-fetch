@@ -10,17 +10,20 @@
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.url :as url])
   (:import [java.io ByteArrayInputStream ByteArrayOutputStream InputStream
-                    IOException]
-           [java.net URI]
+                    IOException OutputStream]
+           [java.net ConnectException InetAddress URI UnknownHostException]
            [java.net.http HttpClient HttpClient$Redirect HttpRequest
                           HttpRequest$Builder HttpRequest$BodyPublishers
                           HttpResponse HttpResponse$BodyHandlers
                           HttpTimeoutException]
+           [java.nio.channels UnresolvedAddressException]
            [java.security MessageDigest]
            [java.time Duration]
+           [java.util Arrays]
            [java.util.concurrent ScheduledFuture ScheduledThreadPoolExecutor
                                  ThreadFactory TimeUnit]
-           [java.util.zip GZIPInputStream]))
+           [java.util.zip GZIPInputStream]
+           [javax.net.ssl SSLException]))
 
 (defonce ^{:doc "The shared HTTP client, built on first use, with a
   connect timeout of 15 seconds. Redirects are left to send!, which
@@ -39,21 +42,27 @@
         (.map (.headers response))))
 
 (defn pump
-  "Read `in` from `url` to its end in pieces, give each piece to `f`, and
-  throw ::too-large once more than `max-bytes` have arrived.
+  "Read `in` from `url` in pieces to its end, or to `limit` bytes when it's
+  given, give each piece to `f`, and throw ::too-large once more than
+  `max-bytes` have arrived. It gives how many bytes it read.
 
   The `f` takes the buffer and the length of the piece. With nil
   `max-bytes`, it reads everything."
-  [^InputStream in max-bytes url f]
-  (let [buffer (byte-array 65536)]
-    (loop [total 0]
-      (let [n (.read in buffer)]
-        (when-not (neg? n)
-          (let [total (+ total n)]
-            (when (and max-bytes (> total max-bytes))
-              (throw (limits/too-large url max-bytes)))
-            (f buffer n)
-            (recur total)))))))
+  ([in max-bytes url f]
+   (pump in nil max-bytes url f))
+  ([^InputStream in limit max-bytes url f]
+   (let [size   65536
+         buffer (byte-array size)]
+     (loop [total 0]
+       (let [want (if limit (min size (- limit total)) size)
+             n    (if (pos? want) (.read in buffer 0 (int want)) -1)]
+         (if (neg? n)
+           total
+           (let [total (+ total n)]
+             (when (and max-bytes (> total max-bytes))
+               (throw (limits/too-large url max-bytes)))
+             (f buffer n)
+             (recur total))))))))
 
 (defn read-bounded
   "The bytes of `in` from `url`, read to its end within `max-bytes`."
@@ -156,6 +165,41 @@
                                       (str body))))))
         (.build))))
 
+(defn- unresolved?
+  "Whether the host of `uri` is a name that doesn't resolve."
+  [^URI uri]
+  (try
+    (some-> (.getHost uri) InetAddress/getAllByName)
+    false
+    (catch UnknownHostException _
+      true)))
+
+(defn- connect-failure
+  "The exception of the request to `url` that failed with `e` before an
+  answer: typed when its causes say that the name didn't resolve, that the
+  host couldn't be reached or that the secure connection failed, and else
+  `e`. A timeout stays as it is."
+  [url ^Throwable e]
+  (let [causes (take-while some? (iterate ex-cause e))
+        any    (fn [& classes]
+                 (some (fn [x] (when (some #(instance? % x) classes) x))
+                       causes))]
+    (cond
+      (instance? HttpTimeoutException e)
+      e
+
+      (any UnresolvedAddressException UnknownHostException)
+      (limits/unresolved url e)
+
+      (any SSLException)
+      (limits/tls-failure url e (ex-message (any SSLException)))
+
+      (any ConnectException)
+      (limits/unreachable url e)
+
+      :else
+      e)))
+
 (defn send-following!
   "Send the `request`, follow its redirects until the instant `deadline`
   in epoch milliseconds, and check each URL with `allow-pred`.
@@ -163,7 +207,8 @@
   It gives the last response and the redirects before it, each as a
   vector of its status, URL and headers. It follows the redirects itself,
   since the JDK sends credentials on to another origin. A URL that
-  `allow-pred` refuses throws ::refused."
+  `allow-pred` refuses throws ::refused, or ::unresolved when its host is
+  a name that doesn't resolve, as url/public? refuses such a name."
   [request deadline allow-pred]
   (loop [request (update request :url url/legal-url)
          chain   []]
@@ -173,10 +218,15 @@
       (when-not (pos? left)
         (throw (HttpTimeoutException. (str "request timed out: " uri))))
       (when-not (allow-pred url)
-        (throw (limits/refusal url)))
+        (throw (if (unresolved? uri)
+                 (limits/unresolved url nil)
+                 (limits/refusal url))))
       (let [outgoing (java-request uri method headers body left)
-            response (.send ^HttpClient @client outgoing
-                            (HttpResponse$BodyHandlers/ofInputStream))
+            response (try
+                       (.send ^HttpClient @client outgoing
+                              (HttpResponse$BodyHandlers/ofInputStream))
+                       (catch IOException e
+                         (throw (connect-failure url e))))
             status   (.statusCode response)
             location (-> (.headers response)
                          (.firstValue "location")
@@ -233,15 +283,50 @@
       (seq chain) (assoc :redirects chain)
       received    (assoc :content-range received))))
 
+(defn- sink-fn
+  "A function of a buffer and the length of a piece in it that gives the
+  piece to `sink`: an OutputStream, or a function of the bytes of each
+  piece."
+  [sink]
+  (if (instance? OutputStream sink)
+    (fn [^bytes buffer n]
+      (.write ^OutputStream sink buffer 0 (int n)))
+    (fn [^bytes buffer n]
+      (sink (Arrays/copyOf buffer (int n))))))
+
+(defn- sunk!
+  "Give the body of `response` to `request` to its :sink in pieces until
+  `deadline`, with gzip undone, no more than its range needs and within
+  its :max-bytes, and give how many bytes the sink got."
+  [^HttpResponse response
+   {:keys [url range max-bytes sink] :as request}
+   deadline]
+  (let [headers  (headers-of response)
+        gzipped? (headers/gzipped? headers)
+        start    (:start (headers/content-range
+                          (headers/header headers "content-range")))
+        n        (limits/prefix-length (.statusCode response) start gzipped?
+                                       range max-bytes)]
+    (with-open [^InputStream in (.body response)]
+      (within in deadline url
+              #(pump (if gzipped? (GZIPInputStream. in) in)
+                     n max-bytes url (sink-fn sink))))))
+
 (defn send!
   "Send the `request` within `timeout-seconds`, to URLs that `allow-pred`
-  takes, and give the response."
-  [request timeout-seconds allow-pred]
+  takes, and give the response. The body of a success goes to the :sink of
+  the request, when it has one."
+  [{:keys [method sink] :as request} timeout-seconds allow-pred]
   (let [deadline         (+ (System/currentTimeMillis)
                             (* 1000 timeout-seconds))
         [response chain] (send-following! request deadline allow-pred)
-        bytes            (response-bytes response request deadline)]
-    (answer response bytes chain request)))
+        status           (.statusCode ^HttpResponse response)]
+    (if (and sink (not= :head method) (<= 200 status 299))
+      (let [received (sunk! response request deadline)]
+        (assoc (answer response (byte-array 0) chain request)
+               :received received))
+      (answer response (response-bytes response request deadline) chain
+              request))))
 
 (defn digests!
   "Send the `request` within `timeout-seconds`, to URLs that `allow-pred`

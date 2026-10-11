@@ -144,3 +144,78 @@
                 (fn [{:keys [error]}]
                   (is (= ::http/timeout (:type (ex-data error))))
                   (is (http/timeout? error))))))))
+
+(deftest a-body-into-a-sink-in-node
+  (let [b       (js/Buffer.alloc 200000 7)
+        pieces  (atom [])
+        sink    #(swap! pieces conj %)
+        total   #(reduce + (map (fn [^js p] (.-length p)) @pieces))
+        slow    (fn [p]
+                  (swap! pieces conj p)
+                  (js/Promise. (fn [ok] (js/setTimeout ok 1))))
+        written (atom 0)
+        ^js out (new (.-Writable (js/require "node:stream"))
+                     #js {:highWaterMark 1024
+                          :write         (fn [^js chunk _ done]
+                                           (swap! written + (.-length chunk))
+                                           (js/setTimeout done 1))})]
+    (run
+      #(with-node-server
+         (fn [^js req res]
+           (case (.-url req)
+             "/file" (answer res 200 {} b)
+             "/gz"   (answer res 200 {"Content-Encoding" "gzip"} (.gzipSync (js/require "node:zlib") b))
+             (answer res 404 {} "nope")))
+         (fn [base]
+           (-> (http/send! {:url (str base "/file") :sink sink})
+               (.then (fn [{:keys [status body received]}]
+                        (is (= [200 nil 200000 200000] [status body received (total)])
+                            "the body in pieces, of which the response holds none")
+                        (reset! pieces [])
+                        (http/send! {:url (str base "/file") :sink slow})))
+               (.then (fn [{:keys [received]}]
+                        (is (= [200000 200000] [received (total)]) "a sink that gives a promise to wait for")
+                        (http/send! {:url (str base "/file") :sink out})))
+               (.then (fn [{:keys [received]}]
+                        (is (= [200000 200000] [received @written]) "into a writable stream, as fast as it drains")
+                        (reset! pieces [])
+                        (http/send! {:url (str base "/gz") :sink sink})))
+               (.then (fn [{:keys [received]}]
+                        (is (= [200000 200000] [received (total)]) "with gzip undone")
+                        (reset! pieces [])
+                        (http/send! {:url (str base "/file") :sink sink :range [0 99]})))
+               (.then (fn [{:keys [received]}]
+                        (is (= [100 100] [received (total)]) "no more than the range")
+                        (failure-type {:url (str base "/file") :sink sink :max-bytes 1000})))
+               (.then (fn [type]
+                        (is (= ::http/too-large type) "within the limit of the body")
+                        (reset! pieces [])
+                        (http/send! {:url (str base "/gone") :sink sink})))
+               (.then (fn [response]
+                        (is (= [404 "nope" nil 0] [(:status response) (:body response) (:received response) (total)])
+                            "but the body of a failure in the response")))))))))
+
+(deftest requests-that-reach-no-server-in-node
+  (let [failure (fn [request]
+                  (.then (http/try-send! http/send! (merge {:allow-pred (constantly true)} request))
+                         (fn [{:keys [error]}] (http/failure error))))]
+    (run
+      #(with-node-server
+         (fn [_ res] (answer res 200 {} "plain"))
+         (fn [base]
+           (.then (failure {:url (str/replace base "http:" "https:")})
+                  (fn [{:keys [type reason]}]
+                    (is (= ::http/tls type) "a secure connection to a server that doesn't speak TLS")
+                    (is (str/starts-with? reason "The secure connection to https://127.0.0.1:"))))))
+      #(.then (failure {:url "http://127.0.0.1:1/"})
+              (fn [f]
+                (is (= {:type ::http/unreachable :url "http://127.0.0.1:1/"
+                        :reason "The host of http://127.0.0.1:1/ could not be reached"}
+                       f)
+                    "a port where nothing listens")))
+      #(.then (failure {:url "http://no-such-host.invalid/"})
+              (fn [{:keys [type]}]
+                (is (= ::http/unresolved type) "a name that doesn't resolve")))
+      #(.then (http/try-send! http/send-public! {:url "http://no-such-host.invalid/"})
+              (fn [{:keys [error]}]
+                (is (= ::http/unresolved (:type (ex-data error))) "also for a public request"))))))

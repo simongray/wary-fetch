@@ -195,6 +195,31 @@
                         (is (= [404 "nope" nil 0] [(:status response) (:body response) (:received response) (total)])
                             "but the body of a failure in the response")))))))))
 
+(deftest a-body-cut-at-the-limit-in-node
+  (let [page (apply str (repeat 3000 "abcdefghij"))
+        send #(http/send! (merge {:allow-pred (constantly true) :max-bytes 100 :truncate? true} %))]
+    (run
+      #(with-node-server
+         (fn [^js req res]
+           (case (.-url req)
+             "/page" (answer res 200 {} page)
+             "/gz"   (answer res 200 {"Content-Encoding" "gzip"} (.gzipSync (js/require "node:zlib") page))
+             "/json" (answer res 200 {"Content-Type" "application/json"} "{\"a\":[1,2]}")))
+         (fn [base]
+           (-> (send {:url (str base "/page")})
+               (.then (fn [r]
+                        (is (= [(subs page 0 100) true] ((juxt :body :truncated?) r))
+                            "the start of a body larger than :max-bytes, rather than a throw")
+                        (send {:url (str base "/gz")})))
+               (.then (fn [r]
+                        (is (= [(subs page 0 100) true] ((juxt :body :truncated?) r)) "gzip undone first")
+                        (send {:url (str base "/page") :max-bytes 30000})))
+               (.then (fn [r]
+                        (is (= [30000 nil] ((juxt (comp count :body) :truncated?) r)) "and a body that fits is no cut")
+                        (send {:url (str base "/json") :as :json})))
+               (.then (fn [r]
+                        (is (= {:a [1 2]} (:body r)) "JSON read")))))))))
+
 (deftest requests-that-reach-no-server-in-node
   (let [failure (fn [request]
                   (.then (http/try-send! http/send! (merge {:allow-pred (constantly true)} request))

@@ -50,15 +50,27 @@
                     (percent-encode (name k))
                     (str (percent-encode (name k)) "=" (percent-encode v))))))
 
-(defn query-params
-  "The parameters of the query string `s`, decoded, by name. A plus sign
-  is a space, as in the body of a form."
+(defn query-pairs
+  "The parameters of the query string `s`, decoded, as pairs of a name and
+  a value in their order, a name that comes twice twice. A plus sign is a
+  space, as in the body of a form, and a name without = has a nil value.
+
+  Use this rather than query-params where a repeated parameter must be
+  refused, as RFC 6749, section 3.1, has an OAuth server do."
   [s]
   (let [decode #(percent-decode (str/replace (str %) "+" " "))]
-    (into {} (for [part  (str/split (str s) #"&")
-                   :let  [[k v] (map decode (str/split part #"=" 2))]
-                   :when (seq k)]
-               [k v]))))
+    (vec (for [part  (str/split (str s) #"&")
+               :let  [[k v] (str/split part #"=" 2)
+                      k     (decode k)]
+               :when (seq k)]
+           [k (some-> v decode)]))))
+
+(defn query-params
+  "The parameters of the query string `s`, decoded, by name. A plus sign
+  is a space, as in the body of a form. Of a name that comes twice, the
+  last value counts."
+  [s]
+  (into {} (query-pairs s)))
 
 (defn with-query
   "The `url` with `params` added to its query, encoded as in a query
@@ -252,6 +264,36 @@
               (str/replace #"[\t\n\r]" "")
               (str/replace #"^[\x00-\x20]+" ""))]
     (some-> (re-find #"^[a-zA-Z][a-zA-Z0-9+.-]*(?=:)" s) str/lower-case)))
+
+;; RFC 3986, appendix B, with a scheme as section 3.1 has it
+(def ^:no-doc parts-pattern
+  "The scheme, the authority, the path, the query and the fragment of a
+  URL, as groups."
+  (re-pattern (str "(?s)([a-zA-Z][a-zA-Z0-9+.\\-]*):"
+                   "(?://([^/?#]*))?([^?#]*)(?:\\?([^#]*))?(?:#(.*))?")))
+
+;; RFC 3986, section 3.2
+(defn parts
+  "The parts of the URL `s` as it's written, before a parser tidies them,
+  as a map of :scheme, :authority, :userinfo, :host, :port, :path, :query
+  and :fragment, each nil when the URL has none, or nil when `s` has no
+  scheme. The scheme is in lower case, and the rest is as written, e.g. a
+  port of 443 for https, or a .. segment in the path, percent-encoded or
+  not, for a check of the URL rather than a request."
+  [s]
+  (when-let [[_ scheme authority path query fragment]
+             (re-matches parts-pattern (str s))]
+    (let [[_ userinfo host port]
+          (some->> authority
+                   (re-matches #"(?s)(?:(.*)@)?(\[[^\]]*\]|[^:]*)(?::(.*))?"))]
+      {:scheme    (str/lower-case scheme)
+       :authority authority
+       :userinfo  userinfo
+       :host      host
+       :port      port
+       :path      path
+       :query     query
+       :fragment  fragment})))
 
 (def ^:no-doc default-ports
   "The port of each scheme of the web, for a URL that names none."

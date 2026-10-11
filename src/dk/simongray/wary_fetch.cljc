@@ -8,6 +8,7 @@
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
+            [dk.simongray.wary-fetch.json :as json]
             #?(:clj [dk.simongray.wary-fetch.jvm :as jvm])
             [dk.simongray.wary-fetch.limits :as limits]
             #?(:cljs [dk.simongray.wary-fetch.node :as node])
@@ -96,9 +97,14 @@
   unless :method names another, and its headers and body can be hidden
   texts. It can also have these keys:
 
-  - :as :bytes, for a body of bytes rather than text
+  - :as :bytes, for a body of bytes rather than text, or :as :json, for
+    the value of a JSON body as json/read-json reads it, nil when it isn't
+    JSON
   - :timeout-seconds, the limit of the whole exchange (30 by default)
   - :max-bytes, the limit of the body (100 MB by default or nil for none)
+  - :truncate?, true to cut a body that's larger than :max-bytes rather
+    than throw, e.g. to read the start of a large page, and the response
+    then has :truncated?
   - :range, the first and the last byte to ask for (a nil last byte asks
     for the rest)
   - :allow-pred, a predicate of each URL, e.g. url/public?
@@ -132,7 +138,7 @@
   fails, e.g. over an expired certificate. A browser tells none of these
   apart, but gives ::unreachable when it knows that the device is
   offline."
-  [{:keys [method headers timeout-seconds allow-pred]
+  [{:keys [method headers timeout-seconds allow-pred as]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
   (let [method  (some-> method name str/lower-case keyword)
@@ -141,11 +147,15 @@
                     (assoc :method  method
                            :headers (request-headers headers (:range request)
                                                      agent))
-                    revealed)]
-    #?(:clj  (jvm/send! request timeout-seconds allow-pred)
-       :cljs (if node?
-               (node/send! request timeout-seconds allow-pred)
-               (browser/send! request timeout-seconds allow-pred)))))
+                    revealed)
+        sent    #?(:clj  (jvm/send! request timeout-seconds allow-pred)
+                   :cljs (if node?
+                           (node/send! request timeout-seconds allow-pred)
+                           (browser/send! request timeout-seconds
+                                          allow-pred)))]
+    (if (= :json as)
+      (async/then sent #(update % :body json/read-json))
+      sent)))
 
 (defn send-public!
   "Send the `request` but only to a host on the public internet. On the
@@ -159,14 +169,52 @@
 (def ^:no-doc option-keys
   "The keys of a request that say how it's sent, which the functions that
   send take from their options."
-  [:timeout-seconds :max-bytes :allow-pred :user-agent :max-redirects])
+  [:timeout-seconds :max-bytes :allow-pred :user-agent :max-redirects
+   :truncate?])
 
 (defn with-options
   "The `request` with the :timeout-seconds, :max-bytes, :allow-pred,
-  :user-agent and :max-redirects that `opts` give, for a function that
-  sends with the options of send!."
+  :user-agent, :max-redirects and :truncate? that `opts` give, for a
+  function that sends with the options of send!."
   [request opts]
   (into request (remove (comp nil? val)) (select-keys opts option-keys)))
+
+;; HTML Standard, 4.10.21.8, application/x-www-form-urlencoded
+(defn form-request
+  "The request that posts the form `fields` to `url`, with the `opts`
+  below, e.g. to an OAuth token endpoint.
+
+  The `fields` are a map or pairs of names and values, as
+  url/query-string takes them. The body is a hidden text, since a form
+  often holds a secret such as an OAuth code. The `opts` are the :headers
+  to add, and the options of send!, as with-options takes them, e.g.
+  :max-redirects 0 to keep a form from following a redirect."
+  ([url fields]
+   (form-request url fields {}))
+  ([url fields {:keys [headers] :as opts}]
+   {:pre [(map? opts)]}
+   (with-options
+    {:method  :post
+     :url     url
+     :headers (merge {"Content-Type" "application/x-www-form-urlencoded"}
+                     headers)
+     :body    (secret/hide (url/query-string fields))}
+    opts)))
+
+;; RFC 8259, section 11
+(defn json-request
+  "The request that posts the value `x` to `url` as JSON, written by
+  json/write-json, with the `opts` of form-request."
+  ([url x]
+   (json-request url x {}))
+  ([url x {:keys [headers] :as opts}]
+   {:pre [(map? opts)]}
+   (with-options
+    {:method  :post
+     :url     url
+     :headers (merge {"Content-Type" "application/json"} headers)
+     :body    (json/write-json x)}
+    opts)))
 
 (defn ^:no-doc public-by-default
   "The `opts` of a function that fetches, with url/public? as the

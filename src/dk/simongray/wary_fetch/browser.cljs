@@ -90,7 +90,7 @@
   "A promise of the response map for the fetch response `res` to the
   `request`. The body of a success goes to the :sink of the request, when
   it has one."
-  [^js res {:keys [method url as range max-bytes sink] :as request}]
+  [^js res {:keys [method url as range max-bytes sink truncate?] :as request}]
   (let [status   (.-status res)
         received (headers/content-range (.get (.-headers res) "content-range"))
         headers  (into {}
@@ -103,7 +103,13 @@
                    (= "cors" (.-type res)) (assoc :filtered? true))
         ;; fetch undoes gzip itself, so a prefix is one of the file
         n        (limits/prefix-length status (:start received) false range
-                                       max-bytes)]
+                                       max-bytes)
+        cut?     (and truncate? max-bytes (nil? n))
+        ;; one byte more, to tell a body cut short from one that just fits
+        how      (cond
+                   n    {:first n}
+                   cut? {:first (inc max-bytes)}
+                   :else {:max-bytes max-bytes})]
     (cond
       (or (= :head method) (nil? (.-body res)))
       response
@@ -113,14 +119,19 @@
              #(assoc response :received %))
 
       :else
-      (.then (read-body res url (if n {:first n} {:max-bytes max-bytes}))
+      (.then (read-body res url how)
              (fn [b]
-               (cond-> response
-                 (pos? (.-length b))
-                 (assoc :body
-                        (if (= :bytes as)
-                          b
-                          (encoding/decode b (headers/charset headers))))))))))
+               (let [over? (and cut? (> (.-length b) max-bytes))
+                     b     (if over? (.subarray b 0 max-bytes) b)]
+                 (cond-> response
+                   (pos? (.-length b))
+                   (assoc :body
+                          (if (= :bytes as)
+                            b
+                            (encoding/decode b (headers/charset headers))))
+
+                   over?
+                   (assoc :truncated? true))))))))
 
 (defn- offline?
   "Whether the fetch failed with `e` since the device is offline. Fetch

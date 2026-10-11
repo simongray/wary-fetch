@@ -170,6 +170,20 @@
     (is (= "application/rss+xml" (get-in (http/fetch-request "https://example.org/feed.xml" {:accept "application/rss+xml"})
                                          [:headers "Accept"])))))
 
+(deftest forms-and-json-to-post
+  (let [form (http/form-request "https://auth.example/token" [["code" "a b"] ["client_id" "https://app.example/"]]
+                                {:max-redirects 0 :headers {"Accept" "application/json"}})]
+    (is (= {:method        :post
+            :url           "https://auth.example/token"
+            :headers       {"Content-Type" "application/x-www-form-urlencoded" "Accept" "application/json"}
+            :max-redirects 0}
+           (dissoc form :body)))
+    (is (= "#<secret>" (pr-str (:body form))) "a body that holds a secret, which doesn't print")
+    (is (= "code=a%20b&client_id=https%3A%2F%2Fapp.example%2F" (:body (http/revealed form)))))
+  (is (= {:method :post :url "https://mp.example/" :headers {"Content-Type" "application/json"}
+          :body "{\"type\":[\"h-entry\"]}"}
+         (http/json-request "https://mp.example/" {:type ["h-entry"]}))))
+
 (deftest fetching-through-a-send
   (let [sent (atom nil)
         send (fn [request]
@@ -406,6 +420,24 @@
              (is (nil? content-range))
              (is (= (range 20) (map #(bit-and % 0xFF) body)) "of which the start up to the range is read"))
            (is (= 1000 (count (:body (http/send! {:url url :as :bytes :range [10 nil]})))) "all of it for the rest"))))))
+
+#?(:clj
+   (deftest a-body-cut-at-the-limit
+     (let [page  (apply str (repeat 3000 "abcdefghij"))
+           bytes (.getBytes page "UTF-8")
+           send  #(http/send! (merge {:allow-pred (constantly true) :max-bytes 100 :truncate? true} %))]
+       (with-server {"/page" [200 {} bytes]
+                     "/gz"   [200 {"Content-Encoding" "gzip"} (gzip bytes)]
+                     "/json" [200 {"Content-Type" "application/json"} (.getBytes "{\"a\":[1,2]}" "UTF-8")]}
+         (fn [base]
+           (is (= [(subs page 0 100) true] ((juxt :body :truncated?) (send {:url (str base "/page")})))
+               "the start of a body larger than :max-bytes, rather than a throw")
+           (is (= [(subs page 0 100) true] ((juxt :body :truncated?) (send {:url (str base "/gz")})))
+               "gzip undone first")
+           (is (= [30000 nil] ((juxt (comp count :body) :truncated?) (send {:url (str base "/page") :max-bytes 30000})))
+               "and a body that fits whole is no cut")
+           (is (= {:a [1 2]} (:body (send {:url (str base "/json") :as :json}))) "JSON read")
+           (is (nil? (:body (send {:url (str base "/page") :as :json :max-bytes nil}))) "and nil when it isn't JSON"))))))
 
 #?(:clj
    (deftest a-body-into-a-sink

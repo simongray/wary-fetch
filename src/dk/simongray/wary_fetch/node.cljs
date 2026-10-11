@@ -314,7 +314,7 @@
   for the `request`, which came after the redirects `chain`. The body of a
   success goes to the :sink of the request, when it has one."
   [{:keys [status headers] :as opened} chain
-   {:keys [method url as range max-bytes sink] :as request}]
+   {:keys [method url as range max-bytes sink truncate?] :as request}]
   (let [received (headers/content-range (headers/header headers
                                                         "content-range"))
         gzipped  (headers/gzipped? headers)
@@ -327,30 +327,56 @@
                      (or (gunzip b max-bytes)
                          (throw (limits/too-large url max-bytes)))
                      b))
-        too-big  #(limits/too-large url max-bytes)]
+        too-big  #(limits/too-large url max-bytes)
+        ;; a body to cut at :max-bytes streams through the gunzip, one byte
+        ;; further, to tell a body cut short from one that just fits
+        cut      (fn []
+                   (let [chunks (array)]
+                     (.then (pour! opened (inc max-bytes) nil gzipped
+                                   #(.push chunks %) too-big)
+                            (fn [_]
+                              (let [b    (.concat js/Buffer chunks)
+                                    cut? (> (.-length b) max-bytes)]
+                                {:bytes      (js/Uint8Array.
+                                              (if cut?
+                                                (.subarray b 0 max-bytes)
+                                                b))
+                                 :inflated?  true
+                                 :truncated? cut?})))))
+        body     (fn [b] {:bytes b})]
     (-> (cond
           ;; an answer to HEAD has no content by RFC 9110, section 9.3.2
-          (= :head method) (do (close! opened)
-                               (js/Promise.resolve (js/Uint8Array. 0)))
-          sunk?            (pour! opened n max-bytes gzipped sink too-big)
-          n                (read! opened n nil nil)
-          :else            (read! opened nil max-bytes too-big))
-        (.then (fn [b]
-                 (cond-> {:status  status
-                          :url     url
-                          :headers headers
-                          :body    (when (and (not sunk?)
-                                              (not= 304 status)
-                                              (pos? (.-length b)))
-                                     (if (= :bytes as)
-                                       (inflate b)
-                                       (encoding/decode
-                                        (inflate b)
-                                        (headers/charset headers))))}
-                   sunk?       (assoc :received b)
-                   moved       (assoc :permanent-url moved)
-                   (seq chain) (assoc :redirects chain)
-                   received    (assoc :content-range received)))))))
+          (= :head method)       (do (close! opened)
+                                     (js/Promise.resolve
+                                      (body (js/Uint8Array. 0))))
+          sunk?                  (pour! opened n max-bytes gzipped sink too-big)
+          n                      (.then (read! opened n nil nil) body)
+          (and truncate?
+               max-bytes)        (cut)
+          :else                  (.then (read! opened nil max-bytes too-big)
+                                        body))
+        (.then (fn [got]
+                 (let [{:keys [bytes inflated? truncated?]} (when-not sunk?
+                                                               got)]
+                   (cond-> {:status  status
+                            :url     url
+                            :headers headers
+                            :body    (when (and bytes
+                                                (not= 304 status)
+                                                (pos? (.-length bytes)))
+                                       (let [b (if inflated?
+                                                 bytes
+                                                 (inflate bytes))]
+                                         (if (= :bytes as)
+                                           b
+                                           (encoding/decode
+                                            b
+                                            (headers/charset headers)))))}
+                     sunk?       (assoc :received got)
+                     moved       (assoc :permanent-url moved)
+                     (seq chain) (assoc :redirects chain)
+                     received    (assoc :content-range received)
+                     truncated?  (assoc :truncated? true))))))))
 
 (defn send!
   "A promise of the response to `request`, sent with node:http within

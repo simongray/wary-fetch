@@ -97,10 +97,13 @@ also have these keys:
 
 - `:timeout-seconds`, the limit of the whole exchange, 30 by default
 - `:max-bytes`, the limit of the body, 100 MB by default
+- `:truncate?`, true to cut a body over `:max-bytes` rather than throw,
+  which marks the response `:truncated?`
 - `:max-redirects`, how many redirects to follow, 5 by default
 - `:allow-pred`, a predicate of the URL and of each redirect
 - `:user-agent`, the User-Agent, unless the headers name one
-- `:as :bytes`, for a body of bytes, e.g. of an image
+- `:as :bytes`, for a body of bytes, e.g. of an image, or `:as :json`,
+  for the value of a JSON body, nil when it isn't JSON
 - `:range`, the first and the last byte to ask for
 - `:sink`, to take the body of a success in pieces, see [Media
   files](#media-files)
@@ -109,6 +112,14 @@ An exchange that goes beyond a limit throws with the `:type`
 `:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`.
 To tell whether an exception is a timeout, including one from the
 platform's own client, use `http/timeout?`.
+
+To post a form, e.g. to an OAuth token endpoint, make the request with
+`http/form-request`, whose body is a hidden text, since a form often
+holds a secret. `http/json-request` posts a value as JSON. The
+`dk.simongray.wary-fetch.json` namespace reads and writes JSON on both
+platforms, with no library, and `dk.simongray.wary-fetch.bytes` has the
+hashes, HMACs, random bytes, base64url and comparisons of secrets that
+signatures and tokens need.
 
 A request that reaches no server throws with the `:type` `unresolved`
 when the name of the host doesn't resolve, `unreachable` when the host
@@ -294,10 +305,10 @@ npm install                   # once, for the Node tests
 clojure -M:cljs compile test  # the tests in Node
 ```
 
-The public namespaces are the root, `headers`, `url`, `proxy`, `async`
-and `secret`. The others are internal: `jvm`, `node` and `browser` are
-the clients of each platform, `redirect` and `limits` hold the rules
-that the clients share, and `date`, `encoding` and `bytes` are helpers.
+The public namespaces are the root, `headers`, `url`, `proxy`, `async`,
+`secret`, `bytes` and `json`. The others are internal: `jvm`, `node` and
+`browser` are the clients of each platform, `redirect` and `limits` hold
+the rules that the clients share, and `date` and `encoding` are helpers.
 
 License
 -------

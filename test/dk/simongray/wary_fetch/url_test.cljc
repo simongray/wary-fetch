@@ -72,7 +72,22 @@
       "no parameters, no change")
   (is (= {"since" "1727000000" "podcast" "https://example.org/feed.xml" "q" "a b c" "flag" nil}
          (url/query-params "since=1727000000&podcast=https%3A%2F%2Fexample.org%2Ffeed.xml&q=a+b%20c&flag&=x"))
-      "the parameters of a query, decoded"))
+      "the parameters of a query, decoded")
+  (is (= [["code" "1"] ["state" "x y"] ["code" "2"] ["flag" nil]]
+         (url/query-pairs "code=1&state=x+y&code=2&flag"))
+      "as pairs in order, so that a parameter that comes twice can be refused")
+  (is (= {"code" "2"} (url/query-params "code=1&code=2")) "of which a map keeps the last"))
+
+(deftest parts-as-written
+  (is (= {:scheme "https" :authority "user:pw@Example.com:443" :userinfo "user:pw" :host "Example.com"
+          :port "443" :path "/a/%2e%2e/b" :query "q=1" :fragment "f"}
+         (url/parts "HTTPS://user:pw@Example.com:443/a/%2e%2e/b?q=1#f"))
+      "before a parser tidies them, the port of the scheme and an encoded .. too")
+  (is (= {:scheme "mailto" :authority nil :userinfo nil :host nil :port nil :path "simon@example.com"
+          :query nil :fragment nil}
+         (url/parts "mailto:simon@example.com")))
+  (is (= "[::1]" (:host (url/parts "http://[::1]:8080/"))))
+  (is (nil? (url/parts "/no/scheme"))))
 
 (deftest hosts-on-the-public-internet
   (is (not-any? url/public? ["http://127.0.0.1/" "http://10.1.2.3/" "http://172.16.0.1/" "http://192.168.1.1/"

@@ -241,12 +241,31 @@
               (recur (redirect/next-request request status target)
                      (conj chain [status url (headers-of response)]))))))))
 
+(defn- cut-bytes
+  "The bytes of the body `in` of an answer from `url` with `headers`, with
+  gzip undone, read until `deadline` but no further than `max-bytes`, as
+  response-bytes gives them, :truncated? when there were more."
+  [^InputStream in headers url max-bytes deadline]
+  (let [out (ByteArrayOutputStream.)]
+    ;; one byte more, to tell a body cut short from one that just fits
+    (within in deadline url
+            #(pump (if (headers/gzipped? headers) (GZIPInputStream. in) in)
+                   (inc (long max-bytes)) nil url
+                   (fn [^bytes buffer n] (.write out buffer 0 (int n)))))
+    (let [b    (.toByteArray out)
+          cut? (> (alength b) (long max-bytes))]
+      {:bytes      (if cut? (Arrays/copyOf b (int max-bytes)) b)
+       :inflated?  true
+       :truncated? cut?})))
+
 (defn- response-bytes
   "The bytes of the body of `response` to `request`, read until `deadline`,
-  no more than the range of the request needs."
-  ^bytes [^HttpResponse response
-          {:keys [method url range max-bytes] :as request}
-          deadline]
+  no more than the range of the request needs, as a map of the :bytes, and
+  :inflated? when gzip is undone already. With the :truncate? of the
+  request, a body larger than its :max-bytes is cut, and :truncated?."
+  [^HttpResponse response
+   {:keys [method url range max-bytes truncate?] :as request}
+   deadline]
   (let [headers (headers-of response)
         start   (:start (headers/content-range
                          (headers/header headers "content-range")))
@@ -257,31 +276,45 @@
       (cond
         ;; an answer to HEAD has no content by RFC 9110, section 9.3.2,
         ;; though some servers send one over HTTP/2
-        (= :head method) (byte-array 0)
-        n                (within in deadline url #(.readNBytes in (int n)))
-        :else            (read-within in deadline max-bytes url)))))
+        (= :head method)
+        {:bytes (byte-array 0)}
+
+        n
+        {:bytes (within in deadline url #(.readNBytes in (int n)))}
+
+        (and truncate? max-bytes)
+        (cut-bytes in headers url max-bytes deadline)
+
+        :else
+        {:bytes (read-within in deadline max-bytes url)}))))
 
 (defn- answer
   "The response map for the `response` of the JDK to `request`, with the
-  body `bytes`, which came after the redirects `chain`."
-  [^HttpResponse response ^bytes bytes chain
-   {:keys [as max-bytes] :as request}]
+  `body` as response-bytes gives it, which came after the redirects
+  `chain`."
+  [^HttpResponse response {:keys [^bytes bytes inflated? truncated?] :as body}
+   chain {:keys [as max-bytes] :as request}]
   (let [status   (.statusCode response)
         headers  (headers-of response)
         final    (str (.uri response))
         moved    (redirect/permanent-url chain final)
         received (headers/content-range
-                  (headers/header headers "content-range"))]
+                  (headers/header headers "content-range"))
+        content  (when (and (not= 304 status) (pos? (alength bytes)))
+                   (let [b (if inflated?
+                             bytes
+                             (inflated headers bytes max-bytes))]
+                     (if (= :bytes as)
+                       b
+                       (encoding/decode b (headers/charset headers)))))]
     (cond-> {:status  status
              :url     final
              :headers headers
-             :body    (when (and (not= 304 status) (pos? (alength bytes)))
-                        (if (= :bytes as)
-                          (inflated headers bytes max-bytes)
-                          (decode headers bytes max-bytes)))}
+             :body    content}
       moved       (assoc :permanent-url moved)
       (seq chain) (assoc :redirects chain)
-      received    (assoc :content-range received))))
+      received    (assoc :content-range received)
+      truncated?  (assoc :truncated? true))))
 
 (defn- sink-fn
   "A function of a buffer and the length of a piece in it that gives the
@@ -323,7 +356,7 @@
         status           (.statusCode ^HttpResponse response)]
     (if (and sink (not= :head method) (<= 200 status 299))
       (let [received (sunk! response request deadline)]
-        (assoc (answer response (byte-array 0) chain request)
+        (assoc (answer response {:bytes (byte-array 0)} chain request)
                :received received))
       (answer response (response-bytes response request deadline) chain
               request))))

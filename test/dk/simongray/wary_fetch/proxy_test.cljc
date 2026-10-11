@@ -33,7 +33,11 @@
    "https://a.example/ep.mp3"   {:status  206
                                  :url     "https://a.example/ep.mp3"
                                  :headers {"content-type" ["audio/mpeg"] "content-range" ["bytes 0-3/1000"]}
-                                 :body    mp3}})
+                                 :body    mp3}
+   "https://a.example/plain"    {:status  301
+                                 :url     "https://a.example/plain"
+                                 :headers {"location" ["http://a.example/plain"]}
+                                 :body    ""}})
 
 (defn- upstream
   "A stand-in for http/send! that answers from answers, notes each request
@@ -113,6 +117,17 @@
            [(get headers "Content-Location") (get headers proxy/permanent-header)]))
     (is (= "default-src 'none'; sandbox" (get headers "Content-Security-Policy")) "a page that opens it runs no scripts"))
   (is (= mp3 (:body (proxy/ring-response (answers "https://a.example/ep.mp3")))) "bytes go as they came")
+  (is (= ["image/png" "application/feed+json; charset=utf-8" "text/vtt; charset=utf-8"]
+         (for [type ["image/png" "application/feed+json" "text/vtt; charset=ISO-8859-1"]]
+           (get-in (proxy/ring-response {:status 200 :headers {"content-type" [type]} :body "…"})
+                   [:headers "Content-Type"])))
+      "a charset only on a type of text, so a page that didn't ask for bytes isn't told that an image is text")
+  (let [{:keys [status headers]} (proxy/ring-response {:status  302
+                                                       :url     "https://a.example/old/ep.mp3"
+                                                       :headers {"location" ["/ep.mp3"]}})]
+    (is (= 302 status) "a redirect that the client didn't follow")
+    (is (= [nil "https://a.example/ep.mp3"] [(get headers "Location") (get headers proxy/location-header)])
+        "with its Location under a name that the browser doesn't follow, made absolute"))
   (is (nil? (get (:headers (proxy/ring-response (answers "https://a.example/feed.xml") {:expose #{"content-type"}})) "etag"))
       "only the headers that the options expose"))
 
@@ -159,7 +174,11 @@
               (async/then (send {:url "https://a.example/ep.mp3" :as :bytes :range [0 3]})
                           (fn [{:keys [status body]}]
                             (is (= [206 mp3] [status body]))
-                            (is (= [:bytes [0 3]] ((juxt :as :range) (first @sent))) "the bytes and the range that the page asked for")))))))
+                            (is (= [:bytes [0 3]] ((juxt :as :range) (first @sent))) "the bytes and the range that the page asked for"))))
+         #(async/then (send {:url "https://a.example/plain"})
+                      (fn [{:keys [status headers]}]
+                        (is (= [301 ["http://a.example/plain"]] [status (get headers "location")])
+                            "a redirect that wasn't followed, from https to http, as a direct request gives it"))))))
 
 (deftest requests-that-are-not-http
   (let [sent (atom [])

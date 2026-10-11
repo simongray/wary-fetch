@@ -11,6 +11,7 @@
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
+            [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def defaults
@@ -46,6 +47,12 @@
   request to for good, since HTTP has no header for it. The name has no
   X-, as RFC 6648 asks, and is one of this library's own."
   "Wary-Fetch-Permanent-Location")
+
+(def ^:no-doc location-header
+  "The response header that names the Location of a redirect that the
+  client didn't follow. A browser would follow a Location itself, to a
+  site that its page can't read, so it goes under a name of its own."
+  "Wary-Fetch-Location")
 
 ;; RFC 9209, section 2.3
 (def ^:no-doc errors
@@ -155,22 +162,43 @@
          (= "bytes" as)     (assoc :as :bytes)
          (= 1 (count asks)) (assoc :range asked))))))
 
+;; RFC 6839, sections 3.1 and 4.1: the +json and +xml suffixes
+(defn- text-type?
+  "Whether the media type `type` holds text: a type of text, JSON or XML,
+  or one with a +json or +xml suffix."
+  [type]
+  (boolean (and type
+                (or (str/starts-with? type "text/")
+                    (contains? #{"application/json" "application/xml"
+                                 "application/javascript"}
+                               type)
+                    (re-find #"\+(?:json|xml)$" type)))))
+
 (defn ring-response
   "The Ring response that gives the page the `response` of its request,
   with the headers of the :expose of `opts`, or else of defaults.
 
   A text body goes as UTF-8, since a page reads the answers of fetch in
-  it. The URL that answered, after redirects, is the Content-Location
-  (RFC 9110, section 8.7). The URL that permanent redirects led to is the
-  Wary-Fetch-Permanent-Location."
+  it, and a type of text says so. Any other type stays as it came, so ask
+  for bytes for a body that isn't text. The URL that answered, after
+  redirects, is the Content-Location (RFC 9110, section 8.7). The URL that
+  permanent redirects led to is the Wary-Fetch-Permanent-Location.
+
+  A redirect that the client didn't follow, e.g. from https to http, keeps
+  its status, and its Location goes as the Wary-Fetch-Location."
   ([response]
    (ring-response response {}))
   ([{:keys [status url permanent-url headers body] :as response}
     {:keys [expose] :or {expose (:expose defaults)} :as opts}]
    (let [type         (when (contains? expose "content-type")
                         (headers/header headers "content-type"))
-         text         (when (string? body) (headers/media-type type))
+         media        (headers/media-type type)
+         text         (when (and (string? body) (text-type? media))
+                        media)
          content-type (if text (str text "; charset=utf-8") type)
+         location     (when (redirect/statuses status)
+                        (some->> (headers/header headers "location")
+                                 (url/absolute-url url)))
          exposed      (for [h (disj expose "content-type")
                             :let [v (headers/joined headers h)]
                             :when v]
@@ -181,7 +209,8 @@
       :headers (cond-> (into safety exposed)
                  type          (assoc "Content-Type" content-type)
                  url           (assoc "Content-Location" url)
-                 permanent-url (assoc permanent-header permanent-url))
+                 permanent-url (assoc permanent-header permanent-url)
+                 location      (assoc location-header location))
       :body    (if (string? body) (bytes/encode body) body)})))
 
 (defn error-response
@@ -249,19 +278,22 @@
   "The `response` of the proxy to `request`, as a direct request would
   give it.
 
-  The response has the :url that answered, after redirects, and the
-  :permanent-url that permanent redirects led to. When the proxy failed to
-  send the request, this throws the exception that a direct request would
-  have thrown, with the same :type."
+  The response has the :url that answered, after redirects, the
+  :permanent-url that permanent redirects led to, and the Location of a
+  redirect that wasn't followed. When the proxy failed to send the
+  request, this throws the exception that a direct request would have
+  thrown, with the same :type."
   [request {:keys [headers] :as response}]
   (if-let [e (some->> (headers/joined headers "proxy-status")
                       (failure request))]
     (throw e)
-    (let [moved (headers/header headers permanent-header)
-          url   (or (headers/header headers "content-location")
-                    (:url request))]
+    (let [moved    (headers/header headers permanent-header)
+          location (headers/header headers location-header)
+          url      (or (headers/header headers "content-location")
+                       (:url request))]
       (cond-> (assoc response :url url)
-        moved (assoc :permanent-url moved)))))
+        moved    (assoc :permanent-url moved)
+        location (assoc-in [:headers "location"] [location])))))
 
 (defn sender
   "A function to give as :send, which sends each request through the

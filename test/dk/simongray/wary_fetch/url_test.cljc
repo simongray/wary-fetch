@@ -1,6 +1,6 @@
 (ns dk.simongray.wary-fetch.url-test
   "URLs and their hosts: URLs made absolute as a browser does it, made
-  legal on the JVM, their schemes, the parameters of a query, and the
+  legal for the client, their schemes, the parameters of a query, and the
   hosts of the public internet."
   (:require [clojure.test :refer [deftest is testing]]
             [dk.simongray.wary-fetch.url :as url]))
@@ -30,7 +30,27 @@
       (is (= "https://a.example/show/x" (url/absolute-url page (str (apply str (repeat 100000 " ")) "x")))))
     (testing "a base that is no URL, or that holds no path"
       (is (every? nil? (map #(url/absolute-url % "x") ["not a url" "/only/a/path" "mailto:a@b.example" nil])))
-      (is (nil? (url/absolute-url page nil))))))
+      (is (nil? (url/absolute-url page nil))))
+    (testing "a fragment alone against a base with an opaque path"
+      (is (= "mailto:a@b.example#x" (url/absolute-url "mailto:a@b.example" "#x"))))))
+
+(deftest hosts-as-a-browser-reads-them
+  (testing "an IPv4 address in any form, and a name in Unicode"
+    (is (= ["http" "127.0.0.1" 80] (url/origin "http://0x7f.1/")))
+    (is (= ["http" "127.0.0.1" 80] (url/origin "http://2130706433/")))
+    (is (= ["https" "xn--bcher-kva.example" 443] (url/origin "https://Bücher.example/"))))
+  (testing "a host that no browser would reach"
+    (is (nil? (url/origin "http://example.255/")))
+    (is (not (url/web-url? "http://exa mple.org/"))))
+  (testing "the bytes of an IPv6 address that holds an IPv4 one"
+    (is (= [0 0 0 0 0 0 0 0 0 0 0xff 0xff 127 0 0 1] (url/ip-address "[::ffff:127.0.0.1]")))))
+
+(deftest urls-that-the-client-requests
+  (testing "the host that public? checks, in the text that the client sends"
+    (is (= "http://127.0.0.1/a%20b" (url/legal-url "http://0x7f.1/a b")))
+    (is (not-any? url/public? ["http://0x7f.1/" "http://2130706433/" "http://017700000001/"])))
+  (testing "a path as whatwg-url writes it, e.g. ^ encoded as in the URL Standard of 2026"
+    (is (= "http://127.0.0.1/a%5Eb" (url/legal-url "http://127.0.0.1/a^b")))))
 
 #?(:clj
    (deftest urls-the-wild-hands-out

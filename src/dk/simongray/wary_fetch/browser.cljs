@@ -6,7 +6,8 @@
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]
-            [dk.simongray.wary-fetch.limits :as limits]))
+            [dk.simongray.wary-fetch.limits :as limits]
+            [dk.simongray.wary-fetch.url :as url]))
 
 (def available?
   "Whether the code runs in a page or a worker of a browser. There, a
@@ -145,17 +146,19 @@
 (defn send!
   "A promise of the response to `request`, sent with fetch within
   `timeout-seconds`, unless `allow-pred` refuses its URL."
-  [{:keys [method url headers body max-redirects] :as request}
-   timeout-seconds
-   allow-pred]
-  (if-not (allow-pred url)
-    (js/Promise.reject (limits/refusal url))
-    (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
-          init   (cond-> {:method  (str/upper-case (name (or method :get)))
-                          :headers headers
-                          :signal  signal}
-                   (some? body)        (assoc :body body)
-                   (= 0 max-redirects) (assoc :redirect "manual"))]
-      (-> (js/fetch url (clj->js init))
-          (.catch #(throw (if (offline? %) (limits/unreachable url %) %)))
-          (.then #(answer % request))))))
+  [request timeout-seconds allow-pred]
+  ;; so that the browser's parser, which reads the URL again, reads the
+  ;; host that was checked
+  (let [{:keys [method url headers body max-redirects] :as request}
+        (update request :url url/legal-url)]
+    (if-not (allow-pred url)
+      (js/Promise.reject (limits/refusal url))
+      (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
+            init   (cond-> {:method  (str/upper-case (name (or method :get)))
+                            :headers headers
+                            :signal  signal}
+                     (some? body)        (assoc :body body)
+                     (= 0 max-redirects) (assoc :redirect "manual"))]
+        (-> (js/fetch url (clj->js init))
+            (.catch #(throw (if (offline? %) (limits/unreachable url %) %)))
+            (.then #(answer % request)))))))

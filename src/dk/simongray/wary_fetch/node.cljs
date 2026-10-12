@@ -307,7 +307,9 @@
                                                               target)
                                        (conj chain
                                              [status url headers])))))))))]
-    (step request [])))
+    ;; so that Node's own parser, which reads the URL again, reads the host
+    ;; that was checked
+    (step (update request :url url/legal-url) [])))
 
 (defn- answer
   "A promise of the response map for the answer that node:http `opened`

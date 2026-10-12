@@ -18,7 +18,8 @@ document you fetched. Requests and responses are plain maps.
 
 The same code runs on the JVM, in Node and in the browser, where a proxy
 on your own server lets a page fetch from sites that don't allow it.
-There are no dependencies but Clojure.
+The only dependency is [whatwg-url](https://github.com/simongray/whatwg-url),
+which reads URLs the way browsers do.
 
 > This library was spun out of [podcast-clj](https://github.com/simongray/podcast-clj),
 > a library for making podcast software, where it fetches feeds, media
@@ -33,7 +34,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.3.2"}
+dk.simongray/wary-fetch {:mvn/version "0.4.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -293,8 +294,10 @@ Principles
 - **Plain data.** Requests and responses are maps, so you can send a
   request with any HTTP client, or with a function of your own.
 - **One codebase.** Apart from the client of each platform, the library
-  is written in `.cljc`, with no dependencies but Clojure, and it behaves
-  the same everywhere, as far as JavaScript allows.
+  is written in `.cljc`, and it behaves the same everywhere, as far as
+  JavaScript allows. It reads each URL and its host with whatwg-url, so a
+  host that a browser would read as an IP address, e.g. 0x7f.1, is checked
+  as one.
 
 Development
 -----------

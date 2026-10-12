@@ -133,6 +133,17 @@
                (.then (fn [type]
                         (is (= ::http/refused type) "an address of loopback is no public one")))))))))
 
+(deftest urls-in-node
+  (run
+    #(with-node-server
+       (fn [^js req res] (answer res 200 {} (.-url req)))
+       (fn [base]
+         ;; Node 24 encodes ^ in a path only when something else needs it
+         (.then (http/send! {:url (str base "/a^b")})
+                (fn [response]
+                  (is (= "/a%5Eb" (:body response))
+                      "the URL as whatwg-url writes it, rather than as Node's own parser reads it")))))))
+
 (deftest time-in-node
   (run
     #(with-node-server

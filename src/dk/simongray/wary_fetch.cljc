@@ -22,7 +22,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.4.0")
+  "wary-fetch/0.5.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -97,6 +97,8 @@
   unless :method names another, and its headers and body can be hidden
   texts. It can also have these keys:
 
+  - :query-params, a map of parameters for the query of the URL, which
+    go after those it has, as url/with-query adds them
   - :as :bytes, for a body of bytes rather than text, or :as :json, for
     the value of a JSON body as json/read-json reads it, nil when it isn't
     JSON
@@ -138,7 +140,7 @@
   fails, e.g. over an expired certificate. A browser tells none of these
   apart, but gives ::unreachable when it knows that the device is
   offline."
-  [{:keys [method headers timeout-seconds allow-pred as]
+  [{:keys [method headers timeout-seconds allow-pred as query-params]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
   (let [method  (some-> method name str/lower-case keyword)
@@ -147,6 +149,9 @@
                     (assoc :method  method
                            :headers (request-headers headers (:range request)
                                                      agent))
+                    (cond-> query-params
+                      (update :url url/with-query query-params))
+                    (dissoc :query-params)
                     revealed)
         sent    #?(:clj  (jvm/send! request timeout-seconds allow-pred)
                    :cljs (if node?

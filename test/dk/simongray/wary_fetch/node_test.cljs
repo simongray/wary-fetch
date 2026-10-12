@@ -30,6 +30,10 @@
            "/feed.xml" (answer res 200 {"Content-Type" "application/rss+xml; charset=ISO-8859-1"
                                         "ETag"         "\"v1\""}
                                (js/Buffer.from "<rss>Blåbær</rss>" "latin1"))
+           "/page"     (answer res 200 {"Content-Type" "text/html"}
+                               (js/Buffer.concat
+                                #js [(js/Buffer.from "<head><meta charset=\"windows-1252\"></head>Café " "latin1")
+                                     (js/Buffer.from #js [0x80])]))
            "/gzip"     (answer res 200 {"Content-Encoding" "gzip"}
                                (.gzipSync (js/require "node:zlib") "hello"))
            "/bomb"     (answer res 200 {"Content-Encoding" "gzip"}
@@ -44,6 +48,10 @@
              (.then (fn [{:keys [status body headers]}]
                       (is (= [200 "<rss>Blåbær</rss>"] [status body]) "decoded by the charset of the Content-Type")
                       (is (= ["\"v1\""] (get headers "etag")))
+                      (http/send! {:url (str base "/page")})))
+             (.then (fn [{:keys [body]}]
+                      (is (= "<head><meta charset=\"windows-1252\"></head>Café €" body)
+                          "an HTML page by the charset of its meta tag")
                       (http/send! {:url (str base "/gzip")})))
              (.then (fn [response]
                       (is (= "hello" (:body response)) "gzip undone")

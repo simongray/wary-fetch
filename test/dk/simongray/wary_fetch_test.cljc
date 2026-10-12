@@ -225,6 +225,15 @@
            (.stop server 0))))))
 
 #?(:clj
+   (deftest parameters-of-the-query
+     (with-server {"/search" [200 {} (.getBytes "ok" "UTF-8")]}
+       (fn [base]
+         (is (= (str base "/search?lang=da&q=a%20b")
+                (:url (http/send! (merge local {:url          (str base "/search?lang=da")
+                                                :query-params {:q "a b" :page nil}}))))
+             "after the parameters of the URL, without a nil one")))))
+
+#?(:clj
    (deftest fetching-from-a-server
      (let [xml   "<?xml version=\"1.0\" encoding=\"UTF-8\"?><rss version=\"2.0\"><channel><title>Blåbær</title></channel></rss>"
            bytes (.getBytes xml "UTF-8")

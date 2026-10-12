@@ -129,7 +129,7 @@
                    (assoc :body
                           (if (= :bytes as)
                             b
-                            (encoding/decode b (headers/charset headers))))
+                            (encoding/decode b headers)))
 
                    over?
                    (assoc :truncated? true))))))))

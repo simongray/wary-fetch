@@ -383,6 +383,21 @@
          (not (re-find #"(^|\.)(localhost|local|internal|home\.arpa)$" h))
          (not (hosts/ends-in-a-number? h)))))
 
+(defn public-host?
+  "Whether the host of the http or https URL `url` is on the public
+  internet by its text alone, with no lookup of the name: an address of
+  the public internet, or a name that public-name? takes.
+
+  A name can still lead to an address on a local network, which public?
+  checks on the JVM and in Node, so use this where a lookup can't be made
+  or costs too much, e.g. to check many links at once."
+  [url]
+  (let [h (some-> (host url) (str/replace #"\.$" ""))]
+    (boolean (and h
+                  (if-let [b (ip-address h)]
+                    (public-ip? b)
+                    (public-name? h))))))
+
 #?(:cljs
    (def ^:dynamic ^:no-doc *addresses*
      "The addresses that send! looked up in Node for the host of a request,
@@ -395,10 +410,9 @@
   internet rather than on the network of the app or of its device.
 
   On the JVM each address that the name resolves to must be public, and a
-  name that doesn't resolve isn't. In ClojureScript the name must have a
-  dot in it and mustn't be localhost or a name under .localhost, .local,
-  .internal or .home.arpa. When send! asks in Node, each address of the
-  name must be public too."
+  name that doesn't resolve isn't. In ClojureScript the host must pass
+  public-host?, and when send! asks in Node, each address of the name must
+  be public too."
   [url]
   #?(:clj  (try
              ;; the host as the URL Standard reads it, which legal-url
@@ -412,12 +426,10 @@
              (catch Exception _
                false))
      :cljs (let [h (some-> (host url) (str/replace #"\.$" ""))]
-             (boolean (and h
-                           (if-let [b (ip-address h)]
-                             (public-ip? b)
-                             (and (public-name? h)
-                                  (every? #(and % (public-ip? %))
-                                          (get *addresses* h)))))))))
+             (boolean (and (public-host? url)
+                           (or (ip-address h)
+                               (every? #(and % (public-ip? %))
+                                       (get *addresses* h))))))))
 
 (comment
   (query-string {:q "clojure podcasts" :max 10 :pretty true})

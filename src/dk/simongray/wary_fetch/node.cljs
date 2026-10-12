@@ -371,9 +371,7 @@
                                                  (inflate bytes))]
                                          (if (= :bytes as)
                                            b
-                                           (encoding/decode
-                                            b
-                                            (headers/charset headers)))))}
+                                           (encoding/decode b headers))))}
                      sunk?       (assoc :received got)
                      moved       (assoc :permanent-url moved)
                      (seq chain) (assoc :redirects chain)

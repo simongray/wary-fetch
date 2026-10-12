@@ -151,6 +151,13 @@
      (binding [url/*addresses* {"a.example" [nil]}]
        (is (not (url/public? "https://a.example/")) "an address that doesn't read"))))
 
+(deftest hosts-public-by-their-text
+  (is (every? url/public-host? ["https://podcastindex.org/" "https://podcastindex.org./" "http://8.8.8.8/"
+                                "https://[2606:4700:4700::1111]/"]))
+  (is (not-any? url/public-host? ["http://127.0.0.1/" "http://10.0.0.1/" "http://[::1]/" "http://localhost/"
+                                  "https://printer.local/" "http://0x7f.0.0.1/" "https://nas/" "not a url"])
+      "with no lookup, on every platform"))
+
 (deftest names-of-the-public-internet
   (is (every? url/public-name? ["podcastindex.org" "PodcastIndex.org." "a.b.example" "0x7f.example" "1.example"]))
   (is (not-any? url/public-name? ["localhost" "localhost." "nas" "nas.local" "NAS.Local." "wiki.internal"

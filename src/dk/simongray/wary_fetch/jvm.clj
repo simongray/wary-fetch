@@ -129,13 +129,13 @@
   "The `body` bytes of the response with `headers` as a string, gunzipped
   to at most `max-bytes` when the response says so.
 
-  With nil `max-bytes`, there's no limit. The body is decoded as an XML
-  document is, with the charset that the Content-Type names."
+  With nil `max-bytes`, there's no limit. The body is decoded in the
+  charset of the Content-Type, or else the one that an HTML page or an
+  XML document names."
   ([headers body]
    (decode headers body nil))
   ([headers ^bytes body max-bytes]
-   (encoding/decode (inflated headers body max-bytes)
-                    (headers/charset headers))))
+   (encoding/decode (inflated headers body max-bytes) headers)))
 
 (defn- java-request
   "The java.net.http request of `method` to `uri`, with `headers`, the
@@ -306,7 +306,7 @@
                              (inflated headers bytes max-bytes))]
                      (if (= :bytes as)
                        b
-                       (encoding/decode b (headers/charset headers)))))]
+                       (encoding/decode b headers))))]
     (cond-> {:status  status
              :url     final
              :headers headers

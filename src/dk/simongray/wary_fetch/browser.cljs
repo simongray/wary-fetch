@@ -181,6 +181,9 @@
       (limits/unsendable-header headers)
       (js/Promise.reject (limits/invalid-header url headers))
 
+      (coll? body)
+      (js/Promise.reject (limits/invalid-body url))
+
       (limits/stopped? stop)
       (js/Promise.reject (limits/aborted url))
 

@@ -68,7 +68,9 @@ Fetch a document with `http/fetch!`:
 
 The response also has the `:headers`, and the `:body` as text, decoded by
 the charset that the server or the document declares. In ClojureScript,
-`http/fetch!` gives a promise of the response.
+`http/fetch!` gives a promise of the response. The headers map each name
+in lower case to a vector of its values, so read one with
+`headers/header`, e.g. `(headers/header (:headers response) "etag")`.
 
 Give the next request the `:etag` and `:last-modified` of the response,
 and a document that hasn't changed comes back as a 304 without a body:
@@ -120,6 +122,8 @@ To tell whether an exception is a timeout, including one from the
 platform's own client, use `http/timeout?`. One that its signal stopped
 throws `:dk.simongray.wary-fetch/aborted`, which `http/aborted?` tells.
 
+The body of a request is text or bytes, and a map or another collection
+as the body throws with the `:type` `:dk.simongray.wary-fetch/invalid-body`.
 To post a form, e.g. to an OAuth token endpoint, make the request with
 `http/form-request`, whose body is a hidden text, since a form often
 holds a secret. `http/json-request` posts a value as JSON, and
@@ -140,7 +144,8 @@ offline, the type is `unreachable`.
 
 Use `http/send-public!` to send a request with `url/public?` as its
 `:allow-pred`, and `http/try-send!` to get the exception in a map instead
-of a throw. The `http/failure` function gives an exception as data.
+of a throw. On the JVM, `http/try-send!` gives the map in a future, so
+that several requests can be under way at once. The `http/failure` function gives an exception as data.
 
 The functions that make a request for you, e.g. `http/fetch!`, take the
 limits, `:allow-pred` and `:user-agent` as options, and

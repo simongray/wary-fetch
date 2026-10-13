@@ -94,13 +94,16 @@
   `allow-pred`. A header value that the JDK and node:http refuse rejects
   with ::invalid-header, since a native client can throw with the value."
   [^js http request deadline allow-pred]
-  (letfn [(step [{:keys [url headers] :as request} chain]
+  (letfn [(step [{:keys [url headers body] :as request} chain]
             (cond
               (not (allow-pred url))
               (js/Promise.reject (limits/refusal url))
 
               (limits/unsendable-header headers)
               (js/Promise.reject (limits/invalid-header url headers))
+
+              (coll? body)
+              (js/Promise.reject (limits/invalid-body url))
 
               :else
               (let [left (- deadline (js/Date.now))]

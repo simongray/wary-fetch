@@ -39,6 +39,14 @@
                   " header that HTTP doesn't allow")
              {:type ::http/invalid-header :url url :header k})))
 
+(defn invalid-body
+  "The exception of a request to `url` whose body is a collection, e.g. a
+  map meant for json-request, which a client would send as printed text."
+  [url]
+  (ex-info (str "The request to " url " has a collection as its body, "
+                "which needs to be text or bytes")
+           {:type ::http/invalid-body :url url}))
+
 (defn too-large
   "The exception of a response body from `url` that holds more than
   `max-bytes`."

@@ -111,7 +111,9 @@
 
   The request is a map of :method, :url, :headers and :body. It's a GET
   unless :method names another, and its headers and body can be hidden
-  texts. It can also have these keys:
+  texts. The body is text or bytes, and one that's a collection, e.g. a
+  map meant for json-request, throws ::invalid-body. A request can also
+  have these keys:
 
   - :query-params, a map of parameters for the query of the URL, which
     go after those it has, as url/with-query adds them

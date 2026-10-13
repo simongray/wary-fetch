@@ -297,13 +297,15 @@
   that node:http would refuse rejects with ::invalid-header, as on the
   JVM."
   [request deadline allow-pred]
-  (letfn [(step [{:keys [url headers signal] :as request} chain]
+  (letfn [(step [{:keys [url headers body signal] :as request} chain]
             (-> (if (limits/stopped? signal)
                   (js/Promise.reject (limits/aborted url))
                   (checked! url allow-pred deadline))
                 (.then (fn [addresses]
                          (when (limits/unsendable-header headers)
                            (throw (limits/invalid-header url headers)))
+                         (when (coll? body)
+                           (throw (limits/invalid-body url)))
                          (open! request addresses deadline
                                 (fn [] (limits/late url)))))
                 (.catch #(throw (connect-failure url %)))

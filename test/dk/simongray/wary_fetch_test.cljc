@@ -200,6 +200,18 @@
              :cljs [(failed #(browser/send! (http/prepared (request {"Cookie" (str "id=" token "X-Injected: 1")})) 5 (constantly true))
                             "Cookie")]))))
 
+(deftest a-body-that-cant-be-sent
+  (let [url     "http://127.0.0.1:1/"
+        request (fn [body] {:method :post :url url :body body :allow-pred (constantly true)})
+        failed  (fn [send what]
+                  #(async/then (async/attempt send)
+                               (fn [{:keys [error]}]
+                                 (is (= {:type ::http/invalid-body :url url} (ex-data error)) what))))]
+    (run (failed #(http/send! (request {:title "Café"})) "a map, not its printed text")
+         (failed #(http/send! (request ["a" "b"])) "another collection")
+         #?(:cljs (failed #(browser/send! (http/prepared (request {:title "Café"})) 5 (constantly true))
+                          "with fetch too")))))
+
 (deftest the-request-of-a-fetch
   (let [request (http/fetch-request "https://u:p@example.org/feed.xml"
                                     {:etag "\"v1\"" :last-modified "Tue, 29 Sep 2026 10:00:00 GMT" :max-bytes 100 :max-pages 3})]

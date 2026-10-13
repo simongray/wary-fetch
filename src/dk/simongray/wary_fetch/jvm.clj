@@ -274,6 +274,8 @@
                  (limits/refusal url))))
       (when (limits/unsendable-header headers)
         (throw (limits/invalid-header url headers)))
+      (when (coll? body)
+        (throw (limits/invalid-body url)))
       (let [outgoing (java-request uri method headers body left)
             response (try
                        (exchange! outgoing url signal)

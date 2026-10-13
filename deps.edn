@@ -2,11 +2,13 @@
 
  ;; Clojure 1.11 is the floor, and the tests run on it unless an alias says
  ;; otherwise. whatwg-url parses URLs as the URL Standard has browsers do,
- ;; and whatwg-mime reads MIME types as the MIME Sniffing Standard does and
- ;; decodes the text that a charset names.
- :deps  {org.clojure/clojure      {:mvn/version "1.11.4"}
-         dk.simongray/whatwg-url  {:mvn/version "0.1.0"}
-         dk.simongray/whatwg-mime {:mvn/version "0.2.1"}}
+ ;; whatwg-mime reads MIME types as the MIME Sniffing Standard does and
+ ;; decodes the text that a charset names, and webcrypto-clj has the bytes,
+ ;; their encodings and the cryptography that requests need.
+ :deps  {org.clojure/clojure        {:mvn/version "1.11.4"}
+         dk.simongray/whatwg-url    {:mvn/version "0.1.0"}
+         dk.simongray/whatwg-mime   {:mvn/version "0.2.1"}
+         dk.simongray/webcrypto-clj {:mvn/version "0.1.0"}}
 
  :aliases
  {;; clojure -X:test

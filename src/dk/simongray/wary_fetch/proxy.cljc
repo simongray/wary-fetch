@@ -9,12 +9,12 @@
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
             #?(:clj [dk.simongray.wary-fetch.jvm :as jvm])
             #?(:clj [dk.simongray.wary-fetch.limits :as limits])
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes]
             [dk.simongray.whatwg-mime :as mime])
   #?(:clj (:import [java.io FilterInputStream InputStream]
                    [java.net.http HttpResponse]

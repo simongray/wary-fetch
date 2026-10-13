@@ -6,12 +6,12 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run #?(:clj with-file-server)]]
-            [dk.simongray.wary-fetch.url :as url])
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes])
   #?(:clj (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
                    [java.io ByteArrayOutputStream]
                    [java.net InetSocketAddress]
@@ -247,15 +247,15 @@
            (dissoc request :headers :body)))
     (is (= "#<secret>" (pr-str (:body request))) "a body that doesn't print")
     (is (= (bytes/hex (bytes/concat
-                       [(bytes/encode (text "Content-Disposition: form-data; name=\"h\"\r\n\r\nentry"))
-                        (bytes/encode (str "--" boundary "\r\n"
-                                           "Content-Disposition: form-data; name=\"photo\"; filename=\"sun%22set.jpg\"\r\n"
-                                           "Content-Type: image/jpeg\r\n\r\n"))
-                        (bytes/of [0xff 0xd8])
-                        (bytes/encode (str "\r\n"
-                                           (text "Content-Disposition: form-data; name=\"note\"; filename=\"blob\"\r\n"
-                                                 "Content-Type: application/octet-stream\r\n\r\nBlåbær")
-                                           "--" boundary "--\r\n"))]))
+                       (bytes/encode (text "Content-Disposition: form-data; name=\"h\"\r\n\r\nentry"))
+                       (bytes/encode (str "--" boundary "\r\n"
+                                          "Content-Disposition: form-data; name=\"photo\"; filename=\"sun%22set.jpg\"\r\n"
+                                          "Content-Type: image/jpeg\r\n\r\n"))
+                       (bytes/of [0xff 0xd8])
+                       (bytes/encode (str "\r\n"
+                                          (text "Content-Disposition: form-data; name=\"note\"; filename=\"blob\"\r\n"
+                                                "Content-Type: application/octet-stream\r\n\r\nBlåbær")
+                                          "--" boundary "--\r\n"))))
            (bytes/hex (:body (http/revealed request))))
         "a text, a file of bytes, and one of text, with the defaults of a browser")
     (is (not= boundary (get-in (http/multipart-request "https://mp.example/media" {"h" "entry"})

@@ -6,7 +6,6 @@
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
             [dk.simongray.wary-fetch.json :as json]
             #?(:clj [dk.simongray.wary-fetch.jvm :as jvm])
@@ -14,6 +13,8 @@
             #?(:cljs [dk.simongray.wary-fetch.node :as node])
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto :as webcrypto]
+            [dk.simongray.webcrypto.bytes :as bytes]
             [dk.simongray.whatwg-mime :as mime])
   #?(:clj (:import [java.net.http HttpTimeoutException])))
 
@@ -280,7 +281,7 @@
    (multipart-request url parts {}))
   ([url parts {:keys [headers] :as opts}]
    {:pre [(map? opts)]}
-   (let [boundary (str "wary-fetch-" (bytes/base64url (bytes/random 18)))]
+   (let [boundary (str "wary-fetch-" (bytes/base64url (webcrypto/random-bytes 18)))]
      (with-options
       {:method  :post
        :url     url
@@ -288,9 +289,9 @@
                                             boundary)}
                        headers)
        :body    (secret/hide
-                 (bytes/concat
-                  (concat (mapcat #(part boundary %) (remove (comp nil? second) parts))
-                          [(bytes/encode (str "--" boundary "--\r\n"))])))}
+                 (apply bytes/concat
+                        (concat (mapcat #(part boundary %) (remove (comp nil? second) parts))
+                                [(bytes/encode (str "--" boundary "--\r\n"))])))}
       opts))))
 
 (defn ^:no-doc public-by-default

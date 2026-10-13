@@ -4,11 +4,11 @@
   body, and redirects that it leaves to the sender."
   (:require [clojure.test :refer [deftest is]]
             [dk.simongray.wary-fetch :as http]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.capacitor :as capacitor]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run]]
-            [dk.simongray.wary-fetch.url :as url]))
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes]))
 
 (defn- plugin
   "A stand-in for CapacitorHttp that answers each URL by `answers`, a map

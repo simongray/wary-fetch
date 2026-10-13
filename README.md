@@ -20,7 +20,9 @@ The same code runs on the JVM, in Node and in the browser, where a proxy
 on your own server lets a page fetch from sites that don't allow it.
 The only dependencies are [whatwg-url](https://github.com/simongray/whatwg-url)
 and [whatwg-mime](https://github.com/simongray/whatwg-mime), which read
-URLs and MIME types the way browsers do.
+URLs and MIME types the way browsers do, and
+[webcrypto-clj](https://github.com/simongray/webcrypto-clj), which has the
+bytes and their encodings.
 
 > This library was spun out of [podcast-clj](https://github.com/simongray/podcast-clj),
 > a library for making podcast software, where it fetches feeds, media
@@ -124,9 +126,9 @@ holds a secret. `http/json-request` posts a value as JSON, and
 `http/multipart-request` posts files, e.g. a photo to upload, beside the
 fields of a form. The
 `dk.simongray.wary-fetch.json` namespace reads and writes JSON on both
-platforms, with no library, and `dk.simongray.wary-fetch.bytes` has the
-hashes, HMACs, random bytes, base64url and comparisons of secrets that
-signatures and tokens need.
+platforms, with no library. For the hashes, HMACs, random bytes, base64url
+and comparisons of secrets that signatures and tokens need, use
+webcrypto-clj.
 
 A request that reaches no server throws with the `:type` `unresolved`
 when the name of the host doesn't resolve, `unreachable` when the host
@@ -347,8 +349,9 @@ clojure -M:cljs compile test  # the tests in Node
 ```
 
 The public namespaces are the root, `headers`, `url`, `proxy`, `async`,
-`secret`, `bytes`, `json`, `capacitor` and `electron`. The others are internal: `jvm`, `node` and
-`browser` are the clients of each platform, `redirect` and `limits` hold
+`secret`, `json`, `capacitor` and `electron`. The others are internal:
+`jvm`, `node` and `browser` are the clients of each platform, `redirect`
+and `limits` hold
 the rules that the clients share, and `date` and `encoding` are helpers.
 
 License

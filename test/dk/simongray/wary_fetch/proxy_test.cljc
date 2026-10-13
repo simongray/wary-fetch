@@ -7,12 +7,12 @@
             [clojure.test :refer [deftest is]]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.proxy :as proxy]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run utf8 #?(:clj with-file-server)]]
-            [dk.simongray.wary-fetch.url :as url]))
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes]))
 
 (def feed-xml
   "<rss version=\"2.0\"><channel><title>Blåbær</title><item><title>E1</title><guid>1</guid></item></channel></rss>")

@@ -17,13 +17,13 @@
   API is at https://capacitorjs.com/docs/apis/http"
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch :as http]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]
             [dk.simongray.wary-fetch.json :as json]
             [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.redirect :as redirect]
-            [dk.simongray.wary-fetch.url :as url]))
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes]))
 
 (defn- unbase64
   "The bytes of the base64 text `s`."

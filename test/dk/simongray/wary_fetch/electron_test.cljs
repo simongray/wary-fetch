@@ -4,11 +4,11 @@
   does, so that nothing but plain data can cross."
   (:require [clojure.test :refer [deftest is]]
             [dk.simongray.wary-fetch :as http]
-            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.electron :as electron]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run with-node-server]]
-            [dk.simongray.wary-fetch.url :as url]))
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.webcrypto.bytes :as bytes]))
 
 (defn- ipc
   "The invoke of a page whose requests the `handler` of the main process

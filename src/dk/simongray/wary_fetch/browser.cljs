@@ -185,16 +185,17 @@
       (js/Promise.reject (limits/aborted url))
 
       :else
-      (let [signal (both (js/AbortSignal.timeout (* 1000 timeout-seconds))
-                         stop)
-            init   (cond-> {:method  (str/upper-case (name (or method :get)))
-                            :headers headers
-                            :signal  signal}
+      (let [late   (js/AbortSignal.timeout (* 1000 timeout-seconds))
+            ;; fetch refuses null headers, which a request without any has
+            init   (cond-> {:method (str/upper-case (name (or method :get)))
+                            :signal (both late stop)}
+                     (seq headers)       (assoc :headers headers)
                      (some? body)        (assoc :body body)
                      (= 0 max-redirects) (assoc :redirect "manual"))
             failed (fn [e]
                      (cond
                        (limits/stopped? stop) (limits/aborted url)
+                       (.-aborted late)       (limits/late url)
                        (offline? e)           (limits/unreachable url e)
                        :else                  e))]
         (-> (js/fetch url (clj->js init))

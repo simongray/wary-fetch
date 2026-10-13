@@ -2,10 +2,12 @@
   "send! in Node, with servers of node:http on localhost: bodies, limits
   and the User-Agent, redirects and the checks of each, the addresses that
   the :allow-pred sees, the time that an exchange may take, and the
-  requests of an Electron page, which its main process sends in Node."
+  requests of an Electron page, which its main process sends in Node.
+  Also the client of a browser, over Node's fetch, past its time."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [dk.simongray.wary-fetch :as http]
+            [dk.simongray.wary-fetch.browser :as browser]
             [dk.simongray.wary-fetch.electron :as electron]
             [dk.simongray.wary-fetch.test-support :refer [ipc run with-node-server]]
             [dk.simongray.wary-fetch.url :as url]))
@@ -291,3 +293,25 @@
                   (fn [{:keys [status body]}]
                     (is (= [200 "hello"] [status body])
                         "a page's request, sent by send! in Node"))))))))
+
+(deftest the-time-of-a-fetch
+  (let [timeout (fn [base]
+                  (.then (http/try-send! #(browser/send! (http/prepared %) 0.2 (constantly true))
+                                         {:url (str base "/")})
+                         (fn [{:keys [error]}]
+                           (:type (ex-data error)))))]
+    (run
+      #(with-node-server
+         (fn [_ _])
+         (fn [base]
+           (.then (timeout base)
+                  (fn [type]
+                    (is (= ::http/timeout type) "a server that never answers")))))
+      #(with-node-server
+         (fn [_ ^js res]
+           (.writeHead res 200 #js {"Content-Length" "100"})
+           (.write res "the start"))
+         (fn [base]
+           (.then (timeout base)
+                  (fn [type]
+                    (is (= ::http/timeout type) "and one whose body stops"))))))))

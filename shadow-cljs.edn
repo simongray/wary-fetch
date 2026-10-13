@@ -1,8 +1,9 @@
 {:deps   {:aliases [:cljs]}
- :builds {;; clojure -M:cljs compile test
+ :builds {;; clojure -M:cljs compile test (the tests of the browser's
+          ;; client, which fetch the files of their page, stay out)
           :test         {:target    :node-test
                          :output-to "target/node-tests.js"
-                         :ns-regexp "-test$"
+                         :ns-regexp "(?<!\\.browser)-test$"
                          :autorun   true}
           ;; clojure -M:cljs compile browser-test, then
           ;; node test/browser-run.mjs target/browser-test (the tests of

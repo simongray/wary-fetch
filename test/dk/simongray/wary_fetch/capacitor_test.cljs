@@ -61,7 +61,8 @@
                         (select-keys o [:method :responseType :disableRedirects])))
                  (is (= {"User-Agent" "my-app/1.0" "Accept" "application/rss+xml"}
                         (select-keys (update-keys (:headers o) name) ["User-Agent" "Accept"])))
-                 (is (= 30000 (:connectTimeout o))))))
+                 (is (<= 29000 (:connectTimeout o) 30000)
+                     "the 30 seconds left, less the milliseconds that pass before the request"))))
      #(.then (send {:url "https://a.example/feed.xml" :as :bytes})
              (fn [{:keys [body]}]
                (is (= cafe (vec body)))))

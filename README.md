@@ -35,7 +35,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.7.0"}
+dk.simongray/wary-fetch {:mvn/version "0.8.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -258,6 +258,12 @@ what a direct request would give:
 
 The handler's options, e.g. which headers it passes on, are in
 `proxy/defaults`.
+
+The handler holds each body in memory, so it takes 32 MB at most. For a
+large file, e.g. an episode that a page saves, mount
+`proxy/stream-handler` too, which passes the body on as it arrives, and
+passes a Range on so that a download can resume. Its options are in
+`proxy/stream-defaults`.
 
 In ClojureScript
 ----------------

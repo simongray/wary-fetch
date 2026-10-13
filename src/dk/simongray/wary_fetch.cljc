@@ -23,7 +23,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.7.0")
+  "wary-fetch/0.8.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."

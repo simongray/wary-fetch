@@ -11,9 +11,15 @@
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
+            #?(:clj [dk.simongray.wary-fetch.jvm :as jvm])
+            #?(:clj [dk.simongray.wary-fetch.limits :as limits])
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]
-            [dk.simongray.whatwg-mime :as mime]))
+            [dk.simongray.whatwg-mime :as mime])
+  #?(:clj (:import [java.io FilterInputStream InputStream]
+                   [java.net.http HttpResponse]
+                   [java.util.concurrent
+                    ScheduledFuture ScheduledThreadPoolExecutor TimeUnit])))
 
 (def defaults
   "The options of the proxy, which its own options replace one by one:
@@ -243,6 +249,127 @@
               (try
                 (let [request (upstream-request ring-request opts)]
                   (ring-response ((:send opts) request) opts))
+                (catch Exception e
+                  (error-response e)))))))))
+
+(def stream-defaults
+  "The options of the streaming proxy, which its own options replace one by
+  one: those of defaults, but for these, since it holds no body in memory:
+
+  - :max-bytes, the most that one answer passes on, 2 GB
+  - :stream-seconds, how long one answer takes at most to pass on, an hour
+  - :expose, also the Accept-Ranges and the Content-Length
+
+  The :send of defaults doesn't count, since the JDK sends each request."
+  (-> defaults
+      (dissoc :send)
+      (assoc :max-bytes      (* 2 1024 1024 1024)
+             :stream-seconds 3600)
+      (update :expose conj "accept-ranges" "content-length")))
+
+#?(:clj
+   (defn- bounded
+     "The body `in` of an answer, which ends after `max-bytes` and closes at
+     the instant `deadline`, so that a slow or an endless answer holds no
+     thread for longer."
+     ^InputStream [^InputStream in max-bytes deadline]
+     (let [left ^longs (long-array [max-bytes])
+           wait (long (max 0 (- deadline (System/currentTimeMillis))))
+           task (.schedule ^ScheduledThreadPoolExecutor @jvm/watchdog
+                           ^Runnable (fn [] (.close in))
+                           wait
+                           TimeUnit/MILLISECONDS)]
+       (proxy [FilterInputStream] [in]
+         (read
+           ([]
+            (if (pos? (aget left 0))
+              (let [b (.read in)]
+                (when-not (neg? b) (aset left 0 (dec (aget left 0))))
+                b)
+              -1))
+           ([^bytes buffer]
+            (.read ^InputStream this buffer 0 (alength buffer)))
+           ([^bytes buffer offset length]
+            (if (pos? (aget left 0))
+              (let [n (.read in buffer (int offset)
+                             (int (min length (aget left 0))))]
+                (when (pos? n) (aset left 0 (- (aget left 0) n)))
+                n)
+              -1)))
+         (close []
+           (.cancel ^ScheduledFuture task false)
+           (.close in))))))
+
+#?(:clj
+   (defn- stream-response
+     "The Ring response that passes on the `response` of the JDK to the
+     prepared `request` after the redirects `chain`, its body as it arrives,
+     with the headers of the :expose of `opts`.
+
+     An answer whose Content-Length is over the :max-bytes of `opts` is
+     refused, before any of its body passes on."
+     [^HttpResponse response chain {:keys [method] :as request}
+      {:keys [expose max-bytes stream-seconds] :as opts}]
+     (let [status   (.statusCode response)
+           url      (str (.uri response))
+           in       ^InputStream (.body response)
+           headers  (jvm/headers-of response)
+           length   (some-> (headers/header headers "content-length")
+                            parse-long)
+           moved    (redirect/permanent-url chain url)
+           location (when (redirect/statuses status)
+                      (some->> (headers/header headers "location")
+                               (url/absolute-url url)))
+           exposed  (for [h    (disj expose "content-type" "content-length")
+                          :let [v (headers/joined headers h)]
+                          :when v]
+                      [h v])
+           type     (headers/header headers "content-type")
+           deadline (+ (System/currentTimeMillis) (* 1000 stream-seconds))]
+       (if (and length max-bytes (< max-bytes length))
+         (do (.close in)
+             (error-response (limits/too-large url max-bytes)))
+         {:status  status
+          ;; under these names, since a Ring adapter adds its own otherwise
+          :headers (cond-> (assoc (into safety exposed) "Content-Location" url)
+                     type     (assoc "Content-Type" type)
+                     length   (assoc "Content-Length" (str length))
+                     moved    (assoc permanent-header moved)
+                     location (assoc location-header location))
+          :body    (if (= :head method)
+                     (do (.close in) nil)
+                     (bounded in (or max-bytes Long/MAX_VALUE) deadline))}))))
+
+;; RFC 9110, section 14: a request for a range goes on as it is, and its
+;; answer of 206 comes back with its Content-Range
+#?(:clj
+   (defn stream-handler
+     "A Ring handler that sends each GET and HEAD request on to the URL of
+     its url parameter, as handler does, with `opts` over stream-defaults,
+     but passes on the body as it arrives rather than holding it, e.g. for
+     an episode that a page saves.
+
+     The body goes on as it came, without gzip undone or text decoded, and
+     a Range goes on, so that a page can resume a download. A redirect is
+     followed by the proxy, which asks :allow-pred about each URL."
+     ([]
+      (stream-handler {}))
+     ([opts]
+      {:pre [(map? opts)]}
+      (let [opts (merge stream-defaults opts)]
+        (fn [ring-request]
+          (or (refusal ring-request)
+              (try
+                (let [request  (-> (upstream-request ring-request opts)
+                                   (assoc :as :bytes)
+                                   (assoc-in [:headers "Accept-Encoding"]
+                                             "identity")
+                                   http/prepared)
+                      timeout  (:timeout-seconds opts 30)
+                      deadline (+ (System/currentTimeMillis) (* 1000 timeout))
+                      [response chain]
+                      (jvm/send-following! request deadline (:allow-pred opts))]
+                  (stream-response response chain request opts))
                 (catch Exception e
                   (error-response e)))))))))
 

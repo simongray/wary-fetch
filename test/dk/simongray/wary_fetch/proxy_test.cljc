@@ -11,7 +11,7 @@
             [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.proxy :as proxy]
             [dk.simongray.wary-fetch.secret :as secret]
-            [dk.simongray.wary-fetch.test-support :refer [run utf8]]
+            [dk.simongray.wary-fetch.test-support :refer [run utf8 #?(:clj with-file-server)]]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def feed-xml
@@ -185,3 +185,36 @@
         send (proxy/sender "/proxy" {:send #(do (swap! sent conj %) {:messages []})})]
     (send {:url "wss://socket.example/" :message "hello"})
     (is (= [{:url "wss://socket.example/" :message "hello"}] @sent) "go to the :send as they are")))
+
+#?(:clj
+   (defn- streamed
+     "The answer of the streaming proxy with `opts` to a GET of `url` with
+     the Ring `headers`, with its body read whole into bytes."
+     [opts url headers]
+     (let [handler  (proxy/stream-handler opts)
+           response (handler {:request-method :get
+                              :query-string   (str "url=" (url/percent-encode url))
+                              :headers        headers})]
+       (update response :body #(if (instance? java.io.InputStream %)
+                                 (with-open [in ^java.io.InputStream %] (.readAllBytes in))
+                                 %)))))
+
+#?(:clj
+   (deftest streaming-through-the-proxy
+     (let [episode (bytes/of (map #(mod % 256) (range 300000)))]
+       (with-file-server episode {}
+         (fn [url]
+           (let [local  {:allow-pred (constantly true)}
+                 whole  (streamed local url {})
+                 part   (streamed local url {"range" "bytes=10-19"})
+                 capped (streamed (assoc local :max-bytes 1000) url {})]
+             (is (= [200 "300000"] [(:status whole) (get-in whole [:headers "Content-Length"])]))
+             (is (bytes/same? episode (:body whole)) "the body as it came, passed on")
+             (is (= "default-src 'none'; sandbox" (get-in whole [:headers "Content-Security-Policy"])))
+             (is (= [206 "bytes 10-19/300000" (range 10 20)]
+                    [(:status part) (get-in part [:headers "content-range"]) (vec (:body part))])
+                 "a range for a download to resume, which goes on as it is")
+             (is (= [502 true] [(:status capped)
+                                (str/includes? (get-in capped [:headers "Proxy-Status"]) "http_response_body_size")])
+                 "an answer over the limit, refused before its body")
+             (is (= 403 (:status (streamed {} url {}))) "a host on the local network, which url/public? refuses")))))))

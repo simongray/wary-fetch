@@ -91,22 +91,28 @@
   connection goes only to the `addresses`, unless they're nil.
 
   The exchange, the body of the answer included, ends at the instant
-  `deadline` in epoch milliseconds, with the exception that `late` gives."
-  [request addresses deadline late]
+  `deadline` in epoch milliseconds, with the exception that `late` gives,
+  or when the AbortSignal of the :signal of the request aborts, with
+  ::aborted."
+  [{:keys [url signal] :as request} addresses deadline late]
   (js/Promise.
    (fn [resolve reject]
-     (let [^js client (module (if (str/starts-with? (:url request) "https:")
+     (let [^js client (module (if (str/starts-with? url "https:")
                                 "node:https"
                                 "node:http"))
            ^js req    (.request client (clj->js (options request addresses)))
            res    (volatile! nil)
            fate   (volatile! nil)
-           timer  (js/setTimeout (fn []
-                                   (let [e (late)]
-                                     (vreset! fate e)
-                                     (.destroy req e)
-                                     (some-> @res (.destroy e))))
+           end!   (fn [e]
+                    (vreset! fate e)
+                    (.destroy req e)
+                    (some-> @res (.destroy e)))
+           timer  (js/setTimeout #(end! (late))
                                  (max 0 (- deadline (js/Date.now))))]
+       (when signal
+         (.addEventListener ^js signal "abort"
+                            #(end! (limits/aborted url))
+                            #js {:once true}))
        (.on req "error" (fn [e]
                           (js/clearTimeout timer)
                           (reject (or @fate e))))
@@ -287,11 +293,14 @@
   "A promise of the answer to `request` before its body is read, the
   redirects before it and the last request, as a vector. It follows the
   redirects until the instant `deadline` and checks each URL with
-  `allow-pred`. A header value that node:http would refuse rejects with
-  ::invalid-header, as on the JVM."
+  `allow-pred`, unless the :signal of the request aborted. A header value
+  that node:http would refuse rejects with ::invalid-header, as on the
+  JVM."
   [request deadline allow-pred]
-  (letfn [(step [{:keys [url headers] :as request} chain]
-            (-> (checked! url allow-pred deadline)
+  (letfn [(step [{:keys [url headers signal] :as request} chain]
+            (-> (if (limits/stopped? signal)
+                  (js/Promise.reject (limits/aborted url))
+                  (checked! url allow-pred deadline))
                 (.then (fn [addresses]
                          (when (limits/unsendable-header headers)
                            (throw (limits/invalid-header url headers)))

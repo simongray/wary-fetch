@@ -23,7 +23,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.8.1")
+  "wary-fetch/0.9.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -133,6 +133,9 @@
     e.g. to write a large file: a function of the bytes of each piece,
     which in ClojureScript can give a promise to wait for, an
     OutputStream on the JVM, or a writable stream in Node
+  - :signal, to stop the exchange: an AbortSignal in ClojureScript, and
+    on the JVM an atom or another thing that derefs without waiting,
+    which turns truthy to stop it
 
   The response is a map of :status, the final :url, :headers and :body.
   The body has gzip undone and text decoded by its charset. A 206 also
@@ -148,11 +151,13 @@
   permanent. A browser follows its own, unless :max-redirects is 0, which
   gives a redirect as a response with the status 0.
 
-  It throws ::timeout or ::too-large past a limit and ::refused when
-  :allow-pred refuses a URL. A header value with a character that HTTP
-  doesn't allow (e.g. a line break) throws ::invalid-header, which names
-  the header but leaves out the value. A request that reaches no server
-  throws
+  It throws ::timeout or ::too-large past a limit, ::refused when
+  :allow-pred refuses a URL, and ::aborted once the :signal says to stop,
+  which the JVM checks every few hundredths of a second, and which the
+  senders of Capacitor and Electron check only before they send. A header
+  value with a character that HTTP doesn't allow (e.g. a line break)
+  throws ::invalid-header, which names the header but leaves out the
+  value. A request that reaches no server throws
   ::unresolved when the name of the host doesn't resolve, ::unreachable
   when the host can't be reached and ::tls when the secure connection
   fails, e.g. over an expired certificate. A browser tells none of these
@@ -184,12 +189,12 @@
   "The keys of a request that say how it's sent, which the functions that
   send take from their options."
   [:timeout-seconds :max-bytes :allow-pred :user-agent :max-redirects
-   :truncate?])
+   :truncate? :signal])
 
 (defn with-options
   "The `request` with the :timeout-seconds, :max-bytes, :allow-pred,
-  :user-agent, :max-redirects and :truncate? that `opts` give, for a
-  function that sends with the options of send!."
+  :user-agent, :max-redirects, :truncate? and :signal that `opts` give,
+  for a function that sends with the options of send!."
   [request opts]
   (into request (remove (comp nil? val)) (select-keys opts option-keys)))
 
@@ -235,6 +240,12 @@
   :allow-pred unless they give another."
   [opts]
   (update opts :allow-pred #(or % url/public?)))
+
+(defn aborted?
+  "Whether the exception `e` of a request is ::aborted, since its :signal
+  said to stop it."
+  [e]
+  (= ::aborted (:type (ex-data e))))
 
 (defn timeout?
   "Whether the exception `e` of a request, or one of its causes, is a

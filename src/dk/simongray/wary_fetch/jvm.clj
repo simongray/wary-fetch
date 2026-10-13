@@ -20,8 +20,9 @@
            [java.security MessageDigest]
            [java.time Duration]
            [java.util Arrays]
-           [java.util.concurrent ScheduledFuture ScheduledThreadPoolExecutor
-                                 ThreadFactory TimeUnit]
+           [java.util.concurrent CompletableFuture ExecutionException
+                                 ScheduledFuture ScheduledThreadPoolExecutor
+                                 ThreadFactory TimeoutException TimeUnit]
            [java.util.zip GZIPInputStream]
            [javax.net.ssl SSLException]))
 
@@ -82,33 +83,55 @@
                         (.setDaemon true)))))
            (.setRemoveOnCancelPolicy true))))
 
+(def ^:no-doc signal-ms
+  "How often the :signal of a request is checked while the request waits,
+  in milliseconds."
+  50)
+
 (defn within
   "The result of `f`, which reads `in` from `url`, but only until the
-  instant `deadline` in epoch milliseconds.
+  instant `deadline` in epoch milliseconds, or until the `signal` of the
+  request says to stop.
 
   At the deadline, the stream is closed and ::timeout thrown, so that a
-  server that sends its body slowly holds no thread for longer."
-  [^InputStream in deadline url f]
-  (let [late?   (atom false)
-        wait-ms (long (max 0 (- deadline (System/currentTimeMillis))))
-        task    (.schedule ^ScheduledThreadPoolExecutor @watchdog
-                           ^Runnable (fn [] (reset! late? true) (.close in))
-                           wait-ms
-                           TimeUnit/MILLISECONDS)]
+  server that sends its body slowly holds no thread for longer, and when
+  the signal says to stop, ::aborted."
+  [^InputStream in deadline url signal f]
+  (let [late?    (atom false)
+        stopped? (atom false)
+        wait-ms  (long (max 0 (- deadline (System/currentTimeMillis))))
+        ^ScheduledThreadPoolExecutor dog @watchdog
+        task     (.schedule dog
+                            ^Runnable (fn [] (reset! late? true) (.close in))
+                            wait-ms
+                            TimeUnit/MILLISECONDS)
+        watch    (when signal
+                   (.scheduleWithFixedDelay
+                    dog
+                    ^Runnable (fn []
+                                (when (limits/stopped? signal)
+                                  (reset! stopped? true)
+                                  (.close in)))
+                    (long signal-ms)
+                    (long signal-ms)
+                    TimeUnit/MILLISECONDS))
+        failure  #(cond @stopped? (limits/aborted url)
+                        @late?    (limits/late url))]
     (try
       (let [result (f)]
         ;; a stream closed under a read can end as if the body had ended
-        (if @late? (throw (limits/late url)) result))
+        (if-let [e (failure)] (throw e) result))
       (catch IOException e
-        (throw (if @late? (limits/late url) e)))
+        (throw (or (failure) e)))
       (finally
-        (.cancel ^ScheduledFuture task false)))))
+        (.cancel ^ScheduledFuture task false)
+        (some-> ^ScheduledFuture watch (.cancel false))))))
 
 (defn- read-within
   "The bytes of `in` from `url` within `max-bytes`, but only until the
-  `deadline`."
-  ^bytes [^InputStream in deadline max-bytes url]
-  (within in deadline url #(read-bounded in max-bytes url)))
+  `deadline`, or until the `signal` says to stop."
+  ^bytes [^InputStream in deadline max-bytes url signal]
+  (within in deadline url signal #(read-bounded in max-bytes url)))
 
 (defn- gunzip
   "The gzipped `body` from `url` inflated, with at most `max-bytes` of the
@@ -200,6 +223,29 @@
       :else
       e)))
 
+(defn- exchange!
+  "The response of the JDK to the request `outgoing` to `url`, with its
+  body as a stream, or ::aborted once the `signal` of the request says to
+  stop while it waits."
+  ^HttpResponse [^HttpRequest outgoing url signal]
+  (let [handler (HttpResponse$BodyHandlers/ofInputStream)]
+    (if-not signal
+      (.send ^HttpClient @client outgoing handler)
+      (let [^CompletableFuture answer (.sendAsync ^HttpClient @client
+                                                  outgoing
+                                                  handler)]
+        (loop []
+          (when (limits/stopped? signal)
+            (.cancel answer true)
+            (throw (limits/aborted url)))
+          (let [response (try
+                           (.get answer (long signal-ms) TimeUnit/MILLISECONDS)
+                           (catch TimeoutException _
+                             nil)
+                           (catch ExecutionException e
+                             (throw (or (ex-cause e) e))))]
+            (or response (recur))))))))
+
 (defn send-following!
   "Send the `request`, follow its redirects until the instant `deadline`
   in epoch milliseconds, and check each URL with `allow-pred`.
@@ -210,13 +256,16 @@
   `allow-pred` refuses throws ::refused, or ::unresolved when its host is
   a name that doesn't resolve, as url/public? refuses such a name. A
   header value that the JDK would refuse throws ::invalid-header, since
-  the JDK's own exception shows the value."
+  the JDK's own exception shows the value. Once the :signal of the request
+  says to stop, it throws ::aborted."
   [request deadline allow-pred]
   (loop [request (update request :url url/legal-url)
          chain   []]
-    (let [{:keys [url method headers body]} request
+    (let [{:keys [url method headers body signal]} request
           uri  (URI. url)
           left (- deadline (System/currentTimeMillis))]
+      (when (limits/stopped? signal)
+        (throw (limits/aborted url)))
       (when-not (pos? left)
         (throw (HttpTimeoutException. (str "request timed out: " uri))))
       (when-not (allow-pred url)
@@ -227,8 +276,7 @@
         (throw (limits/invalid-header url headers)))
       (let [outgoing (java-request uri method headers body left)
             response (try
-                       (.send ^HttpClient @client outgoing
-                              (HttpResponse$BodyHandlers/ofInputStream))
+                       (exchange! outgoing url signal)
                        (catch IOException e
                          (throw (connect-failure url e))))
             status   (.statusCode response)
@@ -247,12 +295,13 @@
 
 (defn- cut-bytes
   "The bytes of the body `in` of an answer from `url` with `headers`, with
-  gzip undone, read until `deadline` but no further than `max-bytes`, as
-  response-bytes gives them, :truncated? when there were more."
-  [^InputStream in headers url max-bytes deadline]
+  gzip undone, read until `deadline` or the `signal`, but no further than
+  `max-bytes`, as response-bytes gives them, :truncated? when there were
+  more."
+  [^InputStream in headers url max-bytes deadline signal]
   (let [out (ByteArrayOutputStream.)]
     ;; one byte more, to tell a body cut short from one that just fits
-    (within in deadline url
+    (within in deadline url signal
             #(pump (if (headers/gzipped? headers) (GZIPInputStream. in) in)
                    (inc (long max-bytes)) nil url
                    (fn [^bytes buffer n] (.write out buffer 0 (int n)))))
@@ -268,7 +317,7 @@
   :inflated? when gzip is undone already. With the :truncate? of the
   request, a body larger than its :max-bytes is cut, and :truncated?."
   [^HttpResponse response
-   {:keys [method url range max-bytes truncate?] :as request}
+   {:keys [method url range max-bytes truncate? signal] :as request}
    deadline]
   (let [headers (headers-of response)
         start   (:start (headers/content-range
@@ -284,13 +333,13 @@
         {:bytes (byte-array 0)}
 
         n
-        {:bytes (within in deadline url #(.readNBytes in (int n)))}
+        {:bytes (within in deadline url signal #(.readNBytes in (int n)))}
 
         (and truncate? max-bytes)
-        (cut-bytes in headers url max-bytes deadline)
+        (cut-bytes in headers url max-bytes deadline signal)
 
         :else
-        {:bytes (read-within in deadline max-bytes url)}))))
+        {:bytes (read-within in deadline max-bytes url signal)}))))
 
 (defn- answer
   "The response map for the `response` of the JDK to `request`, with the
@@ -336,7 +385,7 @@
   `deadline`, with gzip undone, no more than its range needs and within
   its :max-bytes, and give how many bytes the sink got."
   [^HttpResponse response
-   {:keys [url range max-bytes sink] :as request}
+   {:keys [url range max-bytes sink signal] :as request}
    deadline]
   (let [headers  (headers-of response)
         gzipped? (headers/gzipped? headers)
@@ -345,7 +394,7 @@
         n        (limits/prefix-length (.statusCode response) start gzipped?
                                        range max-bytes)]
     (with-open [^InputStream in (.body response)]
-      (within in deadline url
+      (within in deadline url signal
               #(pump (if gzipped? (GZIPInputStream. in) in)
                      n max-bytes url (sink-fn sink))))))
 
@@ -386,7 +435,8 @@
                            (.update d buffer 0 (int n))))]
     (with-open [^InputStream in (.body ^HttpResponse response)]
       (when (= 200 status)
-        (within in deadline url #(pump in nil url update-digests))))
+        (within in deadline url (:signal request)
+                #(pump in nil url update-digests))))
     (cond-> {:status status :url url}
       (= 200 status)
       (assoc :digests (update-vals digests #(.digest ^MessageDigest %))))))

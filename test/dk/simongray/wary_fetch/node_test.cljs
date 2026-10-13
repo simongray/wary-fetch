@@ -164,6 +164,20 @@
                   (is (= ::http/timeout (:type (ex-data error))))
                   (is (http/timeout? error))))))))
 
+(deftest a-signal-in-node
+  (run
+    #(with-node-server
+       (fn [_ ^js res]
+         (.writeHead res 200)
+         (.write res "the start of a body that never ends"))
+       (fn [base]
+         (let [c (js/AbortController.)]
+           (js/setTimeout (fn [] (.abort c)) 200)
+           (.then (http/try-send! http/send! {:url (str base "/") :signal (.-signal c)})
+                  (fn [{:keys [error]}]
+                    (is (= ::http/aborted (:type (ex-data error))))
+                    (is (http/aborted? error)))))))))
+
 (deftest a-body-into-a-sink-in-node
   (let [b       (js/Buffer.alloc 200000 7)
         pieces  (atom [])

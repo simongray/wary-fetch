@@ -143,9 +143,27 @@
        (exists? js/navigator)
        (false? (.-onLine js/navigator))))
 
+;; DOM Standard, section 3.1: AbortSignal.any
+(defn- both
+  "An AbortSignal that aborts when `timeout` does, or the AbortSignal
+  `stop` when there is one, as AbortSignal.any makes it, or by hand in a
+  browser without it."
+  [^js timeout ^js stop]
+  (cond
+    (nil? stop)                timeout
+    (exists? js/AbortSignal.any) (js/AbortSignal.any #js [timeout stop])
+    :else                      (let [c     (js/AbortController.)
+                                     abort #(.abort c (.-reason ^js %))]
+                                 (.addEventListener timeout "abort"
+                                                    #(abort timeout))
+                                 (.addEventListener stop "abort"
+                                                    #(abort stop))
+                                 (.-signal c))))
+
 (defn send!
   "A promise of the response to `request`, sent with fetch within
-  `timeout-seconds`, unless `allow-pred` refuses its URL.
+  `timeout-seconds`, unless `allow-pred` refuses its URL. It rejects with
+  ::aborted when the AbortSignal of its :signal aborts.
 
   A header value that the JDK and node:http refuse (e.g. one with a line
   break) rejects with ::invalid-header before fetch sees it, since Node's
@@ -153,7 +171,8 @@
   [request timeout-seconds allow-pred]
   ;; so that the browser's parser, which reads the URL again, reads the
   ;; host that was checked
-  (let [{:keys [method url headers body max-redirects] :as request}
+  (let [{:keys [method url headers body max-redirects] stop :signal
+         :as   request}
         (update request :url url/legal-url)]
     (cond
       (not (allow-pred url))
@@ -162,13 +181,23 @@
       (limits/unsendable-header headers)
       (js/Promise.reject (limits/invalid-header url headers))
 
+      (limits/stopped? stop)
+      (js/Promise.reject (limits/aborted url))
+
       :else
-      (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
+      (let [signal (both (js/AbortSignal.timeout (* 1000 timeout-seconds))
+                         stop)
             init   (cond-> {:method  (str/upper-case (name (or method :get)))
                             :headers headers
                             :signal  signal}
                      (some? body)        (assoc :body body)
-                     (= 0 max-redirects) (assoc :redirect "manual"))]
+                     (= 0 max-redirects) (assoc :redirect "manual"))
+            failed (fn [e]
+                     (cond
+                       (limits/stopped? stop) (limits/aborted url)
+                       (offline? e)           (limits/unreachable url e)
+                       :else                  e))]
         (-> (js/fetch url (clj->js init))
-            (.catch #(throw (if (offline? %) (limits/unreachable url %) %)))
-            (.then #(answer % request)))))))
+            (.catch #(throw (failed %)))
+            (.then #(answer % request))
+            (.catch #(throw (failed %))))))))

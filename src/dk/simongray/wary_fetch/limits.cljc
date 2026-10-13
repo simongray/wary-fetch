@@ -52,6 +52,25 @@
   (ex-info (str "The request did not end in time: " url)
            {:type ::http/timeout :url url}))
 
+(defn aborted
+  "The exception of a request to `url` that its :signal stopped."
+  [url]
+  (ex-info (str "The request to " url " was aborted")
+           {:type ::http/aborted :url url}))
+
+(defn stopped?
+  "Whether the :signal `signal` of a request says to stop it: in
+  JavaScript an AbortSignal that aborted, and on the JVM a value whose
+  deref is truthy, without waiting for one that isn't realized yet, such
+  as a promise."
+  [signal]
+  (boolean
+   (when signal
+     #?(:clj  (if (instance? clojure.lang.IPending signal)
+                (and (realized? signal) @signal)
+                @signal)
+        :cljs (.-aborted ^js signal)))))
+
 (defn unresolved
   "The exception of a request to `url` whose host name doesn't resolve,
   with the `cause` that the platform gave, or nil."

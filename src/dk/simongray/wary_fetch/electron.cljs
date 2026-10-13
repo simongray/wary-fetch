@@ -22,6 +22,7 @@
   (:require [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.json :as json]
+            [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def ^:no-doc request-keys
@@ -122,15 +123,18 @@
   data of a request to the handler of the main process and gives a promise
   of its answer, e.g. ipcRenderer.invoke with the name of the channel.
 
-  The keys of a request are those of send!, but for :sink and :allow-pred,
-  which the main process doesn't get. Its hidden texts go as text, as they
-  go to a server."
+  The keys of a request are those of send!, but for :sink, :allow-pred
+  and :signal, which the main process doesn't get. The :signal is checked
+  before the request crosses. Its hidden texts go as text, as they go to a
+  server."
   [invoke]
-  (fn [{:keys [as] :as request}]
-    (let [crossing (-> (http/revealed request)
-                       (update :as #(when (= :bytes %) :bytes)))]
-      (-> (invoke (plain crossing request-keys))
-          (.then response-of)
-          (.then (fn [response]
-                   (cond-> response
-                     (= :json as) (update :body json/read-json))))))))
+  (fn [{:keys [url as signal] :as request}]
+    (if (limits/stopped? signal)
+      (js/Promise.reject (limits/aborted url))
+      (let [crossing (-> (http/revealed request)
+                         (update :as #(when (= :bytes %) :bytes)))]
+        (-> (invoke (plain crossing request-keys))
+            (.then response-of)
+            (.then (fn [response]
+                     (cond-> response
+                       (= :json as) (update :body json/read-json)))))))))

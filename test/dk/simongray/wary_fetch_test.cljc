@@ -456,6 +456,46 @@
            (.stop server 0))))))
 
 #?(:clj
+   (deftest a-request-that-its-signal-stops
+     (let [server (HttpServer/create (InetSocketAddress. "127.0.0.1" 0) 0)
+           slow   (fn [headers-first?]
+                    (reify HttpHandler
+                      (handle [_ exchange]
+                        (when-not headers-first?
+                          (Thread/sleep 3000))
+                        (.sendResponseHeaders exchange 200 0)
+                        (let [out (.getResponseBody exchange)]
+                          (try
+                            (dotimes [_ 50]
+                              (.write out (.getBytes " "))
+                              (.flush out)
+                              (Thread/sleep 100))
+                            (catch java.io.IOException _)
+                            (finally
+                              (try (.close out) (catch java.io.IOException _))))))))]
+       (.createContext server "/body" (slow true))
+       (.createContext server "/headers" (slow false))
+       (.start server)
+       (try
+         (doseq [path ["/body" "/headers"]]
+           (let [signal  (atom false)
+                 base    (str "http://127.0.0.1:" (.getPort (.getAddress server)))
+                 started (System/currentTimeMillis)]
+             (future (Thread/sleep 300) (reset! signal true))
+             (let [e (try (http/fetch! (str base path) (assoc local :signal signal))
+                          nil
+                          (catch clojure.lang.ExceptionInfo e e))]
+               (is (= ::http/aborted (:type (ex-data e))) path)
+               (is (http/aborted? e)))
+             (is (< (- (System/currentTimeMillis) started) 1500) (str "stopped at once, while " path " came"))))
+         (is (http/aborted? (try (http/fetch! "http://127.0.0.1:1/" (assoc local :signal (doto (promise) (deliver true))))
+                                 nil
+                                 (catch clojure.lang.ExceptionInfo e e)))
+             "or before it went out, by a promise that is delivered")
+         (finally
+           (.stop server 0))))))
+
+#?(:clj
    (deftest bytes-of-a-media-file
      (let [b (byte-array (map unchecked-byte (range 1000)))]
        (with-file-server b {}

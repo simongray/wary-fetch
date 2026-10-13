@@ -178,16 +178,20 @@
 
   The keys of a request are those of send!, and a :sink is a function of
   the bytes, which it gets in one piece. A failure that the plugin reports
-  is ::http/unreachable, since it says no more of why."
+  is ::http/unreachable, since it says no more of why. The plugin can't
+  stop a request, so the :signal of one is checked before it's sent."
   [^js http]
-  (fn [{:keys [timeout-seconds allow-pred as]
+  (fn [{:keys [url timeout-seconds allow-pred as signal]
         :or   {timeout-seconds 30 allow-pred (constantly true)}
         :as   request}]
-    (let [request  (http/prepared request)
-          deadline (+ (js/Date.now) (* 1000 timeout-seconds))
-          sent     (.then (send-following! http request deadline allow-pred)
-                          (fn [[res headers chain last-request]]
-                            (answer res headers chain last-request)))]
-      (if (= :json as)
-        (.then sent #(update % :body json/read-json))
-        sent))))
+    (if (limits/stopped? signal)
+      (js/Promise.reject (limits/aborted url))
+      (let [request  (http/prepared request)
+            deadline (+ (js/Date.now) (* 1000 timeout-seconds))
+            sent     (.then (send-following! http request deadline
+                                             allow-pred)
+                            (fn [[res headers chain last-request]]
+                              (answer res headers chain last-request)))]
+        (if (= :json as)
+          (.then sent #(update % :body json/read-json))
+          sent)))))

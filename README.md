@@ -35,7 +35,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.8.1"}
+dk.simongray/wary-fetch {:mvn/version "0.9.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -109,11 +109,14 @@ also have these keys:
 - `:range`, the first and the last byte to ask for
 - `:sink`, to take the body of a success in pieces, see [Media
   files](#media-files)
+- `:signal`, to stop the exchange, e.g. when the user cancels: an
+  AbortSignal in ClojureScript, and on the JVM an atom that turns true
 
 An exchange that goes beyond a limit throws with the `:type`
 `:dk.simongray.wary-fetch/timeout` or `:dk.simongray.wary-fetch/too-large`.
 To tell whether an exception is a timeout, including one from the
-platform's own client, use `http/timeout?`.
+platform's own client, use `http/timeout?`. One that its signal stopped
+throws `:dk.simongray.wary-fetch/aborted`, which `http/aborted?` tells.
 
 To post a form, e.g. to an OAuth token endpoint, make the request with
 `http/form-request`, whose body is a hidden text, since a form often

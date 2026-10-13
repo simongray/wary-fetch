@@ -235,6 +235,64 @@
      :body    (json/write-json x)}
     opts)))
 
+;; HTML Standard, 4.10.21.8: a browser escapes these in the names of a
+;; multipart/form-data body
+(defn- escaped
+  "The name or file name `s` of a part, with its quotes and line breaks
+  escaped."
+  [s]
+  (str/replace (str s) #"[\"\r\n]" {"\"" "%22" "\r" "%0D" "\n" "%0A"}))
+
+(defn- part
+  "The bytes of the part after the `boundary` for the field `k` and its
+  value `v`, a text or a file as multipart-request takes them."
+  [boundary [k v]]
+  (let [file?   (map? v)
+        content (if file? (:content v) (str v))]
+    [(bytes/encode
+      (str "--" boundary "\r\n"
+           "Content-Disposition: form-data; name=\"" (escaped (name k)) "\""
+           (when file?
+             (str "; filename=\"" (escaped (or (:filename v) "blob")) "\"\r\n"
+                  "Content-Type: " (or (:content-type v) "application/octet-stream")))
+           "\r\n\r\n"))
+     (if (string? content) (bytes/encode content) content)
+     (bytes/encode "\r\n")]))
+
+;; RFC 7578
+(defn multipart-request
+  "The request that posts the `parts` to `url` as multipart/form-data, with
+  the `opts` of form-request, e.g. to upload a file.
+
+  The `parts` are a map or pairs of names and values, like the fields of
+  form-request. A value is a text, or a file: a map of its :content as
+  bytes or a text, its :filename (blob unless given, as in a browser) and
+  its :content-type (application/octet-stream unless given).
+
+      (multipart-request \"https://example.com/media\"
+                         [[\"file\" {:content      jpeg-bytes
+                                   :filename     \"sunset.jpg\"
+                                   :content-type \"image/jpeg\"}]])
+
+  The body is bytes, hidden like the body of a form, and it holds the
+  files in memory."
+  ([url parts]
+   (multipart-request url parts {}))
+  ([url parts {:keys [headers] :as opts}]
+   {:pre [(map? opts)]}
+   (let [boundary (str "wary-fetch-" (bytes/base64url (bytes/random 18)))]
+     (with-options
+      {:method  :post
+       :url     url
+       :headers (merge {"Content-Type" (str "multipart/form-data; boundary="
+                                            boundary)}
+                       headers)
+       :body    (secret/hide
+                 (bytes/concat
+                  (concat (mapcat #(part boundary %) (remove (comp nil? second) parts))
+                          [(bytes/encode (str "--" boundary "--\r\n"))])))}
+      opts))))
+
 (defn ^:no-doc public-by-default
   "The `opts` of a function that fetches, with url/public? as the
   :allow-pred unless they give another."

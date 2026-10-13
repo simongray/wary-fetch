@@ -120,7 +120,9 @@ throws `:dk.simongray.wary-fetch/aborted`, which `http/aborted?` tells.
 
 To post a form, e.g. to an OAuth token endpoint, make the request with
 `http/form-request`, whose body is a hidden text, since a form often
-holds a secret. `http/json-request` posts a value as JSON. The
+holds a secret. `http/json-request` posts a value as JSON, and
+`http/multipart-request` posts files, e.g. a photo to upload, beside the
+fields of a form. The
 `dk.simongray.wary-fetch.json` namespace reads and writes JSON on both
 platforms, with no library, and `dk.simongray.wary-fetch.bytes` has the
 hashes, HMACs, random bytes, base64url and comparisons of secrets that

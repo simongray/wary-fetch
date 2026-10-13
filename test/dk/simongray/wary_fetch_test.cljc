@@ -6,6 +6,7 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
+            [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.secret :as secret]
@@ -229,6 +230,37 @@
   (is (= {:method :post :url "https://mp.example/" :headers {"Content-Type" "application/json"}
           :body "{\"type\":[\"h-entry\"]}"}
          (http/json-request "https://mp.example/" {:type ["h-entry"]}))))
+
+(deftest files-to-post
+  (let [request  (http/multipart-request "https://mp.example/media"
+                                         [["h" "entry"]
+                                          ["photo" {:content      (bytes/of [0xff 0xd8])
+                                                    :filename     "sun\"set.jpg"
+                                                    :content-type "image/jpeg"}]
+                                          ["note" {:content "Blåbær"}]
+                                          ["empty" nil]]
+                                         {:max-redirects 0})
+        boundary (second (re-find #"^multipart/form-data; boundary=(.+)$"
+                                  (get-in request [:headers "Content-Type"])))
+        text     #(str "--" boundary "\r\n" (apply str %&) "\r\n")]
+    (is (= {:method :post :url "https://mp.example/media" :max-redirects 0}
+           (dissoc request :headers :body)))
+    (is (= "#<secret>" (pr-str (:body request))) "a body that doesn't print")
+    (is (= (bytes/hex (bytes/concat
+                       [(bytes/encode (text "Content-Disposition: form-data; name=\"h\"\r\n\r\nentry"))
+                        (bytes/encode (str "--" boundary "\r\n"
+                                           "Content-Disposition: form-data; name=\"photo\"; filename=\"sun%22set.jpg\"\r\n"
+                                           "Content-Type: image/jpeg\r\n\r\n"))
+                        (bytes/of [0xff 0xd8])
+                        (bytes/encode (str "\r\n"
+                                           (text "Content-Disposition: form-data; name=\"note\"; filename=\"blob\"\r\n"
+                                                 "Content-Type: application/octet-stream\r\n\r\nBlåbær")
+                                           "--" boundary "--\r\n"))]))
+           (bytes/hex (:body (http/revealed request))))
+        "a text, a file of bytes, and one of text, with the defaults of a browser")
+    (is (not= boundary (get-in (http/multipart-request "https://mp.example/media" {"h" "entry"})
+                               [:headers "Content-Type"]))
+        "a boundary of its own")))
 
 (deftest fetching-through-a-send
   (let [sent (atom nil)

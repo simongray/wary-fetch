@@ -6,6 +6,7 @@
   The hashes are synchronous on both platforms. In JavaScript they come
   from the Closure Library rather than WebCrypto, whose digests only come
   as promises."
+  (:refer-clojure :exclude [concat])
   #?(:cljs (:require [goog.crypt :as crypt]
                      [goog.crypt.base64 :as base64]
                      [goog.crypt.Hmac]
@@ -13,7 +14,8 @@
                      [goog.crypt.Sha256]
                      [goog.crypt.Sha384]
                      [goog.crypt.Sha512]))
-  #?(:clj (:import [java.nio.charset StandardCharsets]
+  #?(:clj (:import [java.io ByteArrayOutputStream]
+                   [java.nio.charset StandardCharsets]
                    [java.security MessageDigest SecureRandom]
                    [java.util Base64]
                    [javax.crypto Mac]
@@ -30,6 +32,17 @@
   [xs]
   #?(:clj  (byte-array (map unchecked-byte xs))
      :cljs (js/Uint8Array.from (into-array xs))))
+
+(defn concat
+  "The bytes of each of `bs`, a collection of bytes, one after the other."
+  [bs]
+  #?(:clj  (let [out (ByteArrayOutputStream.)]
+             (doseq [^bytes b bs]
+               (.write out b 0 (alength b)))
+             (.toByteArray out))
+     :cljs (let [out (js/Uint8Array. (transduce (map length) + bs))]
+             (reduce (fn [i b] (.set out b i) (+ i (length b))) 0 bs)
+             out)))
 
 (defn encode
   "The text `s` as the bytes of its UTF-8."

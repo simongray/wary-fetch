@@ -23,6 +23,8 @@
     (is (nil? (bytes/unbase64url "not base64!")))
     (is (= "000102fafbfcfdfeff" (bytes/hex b))))
   (is (= "Blåbær" (bytes/decode (bytes/encode "Blåbær"))))
+  (is (= "000102fffe" (bytes/hex (bytes/concat [(bytes/of [0 1]) (bytes/of []) (bytes/of [2 255 254])]))))
+  (is (zero? (bytes/length (bytes/concat []))))
   (is (= 16 (bytes/length (bytes/random 16))))
   (testing "comparisons of secrets"
     (is (bytes/same-text? "s3cr3t" "s3cr3t"))

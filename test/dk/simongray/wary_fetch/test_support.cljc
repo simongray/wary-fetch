@@ -26,6 +26,16 @@
      :cljs (.decode (js/TextDecoder.) b)))
 
 #?(:cljs
+   (defn ipc
+     "The invoke of an Electron page whose requests the `handler` of the
+     main process answers, with each crossing cloned by the structured
+     clone algorithm, as Electron clones it."
+     [handler]
+     (fn [o]
+       (-> (js/Promise.resolve (handler nil (js/structuredClone o)))
+           (.then #(js/structuredClone %))))))
+
+#?(:cljs
    (defn with-node-server
      "A promise of what `f` gives, as a promise or a value, called with the
      base URL of a server of node:http on 127.0.0.1 that answers each

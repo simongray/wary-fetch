@@ -1,11 +1,13 @@
 (ns dk.simongray.wary-fetch.node-test
   "send! in Node, with servers of node:http on localhost: bodies, limits
   and the User-Agent, redirects and the checks of each, the addresses that
-  the :allow-pred sees, and the time that an exchange may take."
+  the :allow-pred sees, the time that an exchange may take, and the
+  requests of an Electron page, which its main process sends in Node."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [dk.simongray.wary-fetch :as http]
-            [dk.simongray.wary-fetch.test-support :refer [run with-node-server]]
+            [dk.simongray.wary-fetch.electron :as electron]
+            [dk.simongray.wary-fetch.test-support :refer [ipc run with-node-server]]
             [dk.simongray.wary-fetch.url :as url]))
 
 (defn- answer
@@ -277,3 +279,15 @@
       #(.then (http/try-send! http/send-public! {:url "http://no-such-host.invalid/"})
               (fn [{:keys [error]}]
                 (is (= ::http/unresolved (:type (ex-data error))) "also for a public request"))))))
+
+(deftest the-main-process-of-electron
+  (let [main (electron/handler {:allow-pred (constantly true)})
+        send (electron/sender (ipc main))]
+    (run
+      #(with-node-server
+         (fn [_ res] (answer res 200 {"Content-Type" "text/plain; charset=utf-8"} "hello"))
+         (fn [base]
+           (.then (send {:url (str base "/")})
+                  (fn [{:keys [status body]}]
+                    (is (= [200 "hello"] [status body])
+                        "a page's request, sent by send! in Node"))))))))

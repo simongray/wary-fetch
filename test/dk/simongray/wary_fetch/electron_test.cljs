@@ -6,17 +6,9 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.electron :as electron]
             [dk.simongray.wary-fetch.secret :as secret]
-            [dk.simongray.wary-fetch.test-support :refer [run with-node-server]]
+            [dk.simongray.wary-fetch.test-support :refer [ipc run]]
             [dk.simongray.wary-fetch.url :as url]
             [dk.simongray.webcrypto.bytes :as bytes]))
-
-(defn- ipc
-  "The invoke of a page whose requests the `handler` of the main process
-  answers, with each crossing cloned by the structured clone algorithm."
-  [handler]
-  (fn [o]
-    (-> (js/Promise.resolve (handler nil (js/structuredClone o)))
-        (.then #(js/structuredClone %)))))
 
 (deftest a-page-through-the-main-process
   (let [sent    (atom [])
@@ -69,11 +61,4 @@
      #(.then (http/try-send! send {:url "http://127.0.0.1:9/admin"})
              (fn [{:keys [error]}]
                (is (= {:type ::http/refused :url "http://127.0.0.1:9/admin"} (ex-data error))
-                   "the :allow-pred of the main process, url/public? by default, and the type of the failure")))
-     #(with-node-server
-        (fn [_ ^js res] (.writeHead res 200 #js {"Content-Type" "text/plain; charset=utf-8"}) (.end res "hello"))
-        (fn [base]
-          (let [send (electron/sender (ipc (electron/handler {:allow-pred (constantly true)})))]
-            (.then (send {:url (str base "/")})
-                   (fn [{:keys [status body]}]
-                     (is (= [200 "hello"] [status body])) "sent by send! in Node"))))))))
+                   "the :allow-pred of the main process, url/public? by default, and the type of the failure"))))))

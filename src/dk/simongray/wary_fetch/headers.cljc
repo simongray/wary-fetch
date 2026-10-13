@@ -1,6 +1,6 @@
 (ns dk.simongray.wary-fetch.headers
   "The values of HTTP headers as data: the header maps of responses, links,
-  media types, byte ranges, and when to ask again.
+  byte ranges, and when to ask again.
 
   A map of headers has lower-case names, and each value is a string or a
   vector of strings."
@@ -54,22 +54,6 @@
        (partition-by #(= "," %))
        (keep link-of)
        vec))
-
-(defn media-type
-  "The media type of the Content-Type value `s`, or of a type attribute,
-  or nil when `s` names none.
-
-  The media type is in lower case, without its parameters."
-  [s]
-  (some-> s (str/split #";" 2) first str/trim str/lower-case not-empty))
-
-(defn charset
-  "The charset that the Content-Type of the response `headers` names, or
-  nil."
-  [headers]
-  (some->> (header headers "content-type")
-           (re-find #"(?i)charset=\"?([\w.:-]+)")
-           second))
 
 ;; RFC 9110, section 8.4.1.3: x-gzip is gzip
 (defn gzipped?

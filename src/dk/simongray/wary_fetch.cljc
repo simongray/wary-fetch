@@ -13,7 +13,8 @@
             [dk.simongray.wary-fetch.limits :as limits]
             #?(:cljs [dk.simongray.wary-fetch.node :as node])
             [dk.simongray.wary-fetch.secret :as secret]
-            [dk.simongray.wary-fetch.url :as url])
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.whatwg-mime :as mime])
   #?(:clj (:import [java.net.http HttpTimeoutException])))
 
 ;; RFC 9110, section 10.1.5: a product and its version. The bot rules of
@@ -22,7 +23,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.5.0")
+  "wary-fetch/0.6.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -441,7 +442,8 @@
   - :redirects, each a map of :status, :url and :cors, with the URL that
     answered with it
   - :location, the Location of a redirect that wasn't followed
-  - :type, the media type, in lower case and without its parameters
+  - :type, the media type, in lower case and without its parameters, as a
+    browser reads the Content-Type
   - :length, what Content-Length gives
   - :range, the Content-Range, as a map of :start, :end and :total
   - :encoding, :etag and :last-modified, from their headers
@@ -465,7 +467,7 @@
            :redirects     (not-empty (mapv redirect (:redirects response)))
            :permanent-url (:permanent-url response)
            :location      (h "location")
-           :type          (headers/media-type (h "content-type"))
+           :type          (mime/essence (mime/extract (get (:headers response) "content-type")))
            :length        length
            :range         (:content-range response)
            :encoding      (h "content-encoding")

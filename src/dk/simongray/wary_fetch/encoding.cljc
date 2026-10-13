@@ -5,7 +5,7 @@
   declaration of an XML document, by XML 1.0, appendix F, and RFC 7303,
   section 3.2."
   (:require [clojure.string :as str]
-            [dk.simongray.wary-fetch.headers :as headers]))
+            [dk.simongray.whatwg-mime :as mime]))
 
 (defn strip-bom
   "The text `s` without a leading byte order mark."
@@ -41,7 +41,9 @@
   "The encoding that the XML declaration of the bytes `b` names, or nil."
   [b]
   ;; the declaration comes first, so the start of the document is enough
-  (second (re-find #"(?i)<\?xml[^>]*encoding=[\"']([\w.:-]+)" (head b 200))))
+  (some-> (re-find #"(?i)<\?xml[^>]*encoding=[\"']([\w.:-]+)" (head b 200))
+          second
+          mime/label->encoding))
 
 (def attribute-pattern
   "An attribute of a start tag: its name, and its value in double quotes,
@@ -71,8 +73,9 @@
 ;; algorithm for extracting a character encoding from a meta element
 (defn- meta-encoding
   "The encoding that the first meta tag with one names, in the first 1024
-  bytes of the HTML page in the bytes `b`, outside a comment, or nil. A
-  UTF-16 label counts as UTF-8, since the page was read as ASCII."
+  bytes of the HTML page in the bytes `b`, outside a comment, or nil.
+  UTF-16 counts as UTF-8, since the page was read as ASCII, and
+  x-user-defined as windows-1252."
   [b]
   (let [page    (str/replace (head b 1024) #"<!--[\s\S]*?(?:-->|$)" "")
         pragma? #(= "content-type" (str/lower-case (str/trim (str %))))
@@ -81,27 +84,12 @@
                     (or (get attrs "charset")
                         (when (pragma? (get attrs "http-equiv"))
                           (some-> (get attrs "content") content-charset)))))
-        found   (some label (re-seq #"(?i)<meta[\s/][^>]*" page))]
-    (if (some->> found (re-find #"(?i)^\s*utf-16"))
-      "UTF-8"
+        found   (some #(some-> (label %) mime/label->encoding)
+                      (re-seq #"(?i)<meta[\s/][^>]*" page))]
+    (case found
+      ("UTF-16BE" "UTF-16LE") "UTF-8"
+      "x-user-defined"        "windows-1252"
       found)))
-
-;; the Encoding Standard, section 4.2: TextDecoder reads these labels as
-;; windows-1252, in Node and in a browser
-(def latin-1-labels
-  "The labels that name windows-1252, the encoding of Latin-1 and ASCII in
-  a browser."
-  #{"ansi_x3.4-1968" "ascii" "cp1252" "cp819" "csisolatin1" "ibm819"
-    "iso-8859-1" "iso-ir-100" "iso8859-1" "iso88591" "iso_8859-1"
-    "iso_8859-1:1987" "l1" "latin1" "us-ascii" "windows-1252" "x-cp1252"})
-
-(defn- encoding-of
-  "The encoding that `label` names, as a browser reads it: windows-1252
-  for a label of Latin-1 or ASCII, and else `label`."
-  [label]
-  (if (contains? latin-1-labels (str/lower-case (str/trim label)))
-    "windows-1252"
-    label))
 
 #?(:cljs
    (def windows-1252-c1
@@ -127,13 +115,23 @@
                                         (nth windows-1252-c1
                                              (- (.charCodeAt c 0) 0x80))))))))
 
+;; the Encoding Standard, section 10.1.1: GBK's decoder is gb18030's
+#?(:clj
+   (def java-charsets
+     "The Java charset of each encoding of the Encoding Standard that Java
+     knows by another name."
+     {"GBK"            "GB18030"
+      "ISO-8859-8-I"   "ISO-8859-8"
+      "macintosh"      "x-MacRoman"
+      "x-mac-cyrillic" "x-MacCyrillic"}))
+
 (defn- decoded
   "The bytes `b` as text in `encoding`, or in UTF-8 when the platform
   doesn't know it."
   [b encoding]
   #?(:clj  (let [^java.nio.charset.Charset charset
                  (try
-                   (java.nio.charset.Charset/forName encoding)
+                   (java.nio.charset.Charset/forName (get java-charsets encoding encoding))
                    (catch Exception _
                      java.nio.charset.StandardCharsets/UTF_8))]
              (String. ^bytes b charset))
@@ -153,14 +151,14 @@
   - a meta tag in the first 1024 bytes of an HTML page, or the
     declaration of any other document, which XML has
 
-  A label of Latin-1 or ASCII is windows-1252, as a browser reads it, an
-  unknown encoding counts as UTF-8, and the byte order mark is dropped."
+  Each label names an encoding as a browser reads it, e.g. latin1 names
+  windows-1252, and a label of no encoding doesn't count. The byte order
+  mark is dropped."
   [b headers]
-  (let [html? (= "text/html"
-                 (headers/media-type (headers/header headers "content-type")))]
-    (strip-bom (decoded b (encoding-of (or (bom-encoding b)
-                                           (headers/charset headers)
-                                           (if html?
-                                             (meta-encoding b)
-                                             (declared-encoding b))
-                                           "UTF-8"))))))
+  (let [content-type (mime/extract (get headers "content-type"))]
+    (strip-bom (decoded b (or (bom-encoding b)
+                              (mime/encoding content-type)
+                              (if (mime/html? content-type)
+                                (meta-encoding b)
+                                (declared-encoding b))
+                              "UTF-8")))))

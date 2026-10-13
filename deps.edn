@@ -1,9 +1,11 @@
 {:paths ["src"]
 
  ;; Clojure 1.11 is the floor, and the tests run on it unless an alias says
- ;; otherwise. whatwg-url parses URLs as the URL Standard has browsers do.
- :deps  {org.clojure/clojure     {:mvn/version "1.11.4"}
-         dk.simongray/whatwg-url {:mvn/version "0.1.0"}}
+ ;; otherwise. whatwg-url parses URLs as the URL Standard has browsers do,
+ ;; and whatwg-mime reads MIME types as the MIME Sniffing Standard does.
+ :deps  {org.clojure/clojure      {:mvn/version "1.11.4"}
+         dk.simongray/whatwg-url  {:mvn/version "0.1.0"}
+         dk.simongray/whatwg-mime {:mvn/version "0.1.0"}}
 
  :aliases
  {;; clojure -X:test

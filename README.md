@@ -18,8 +18,9 @@ document you fetched. Requests and responses are plain maps.
 
 The same code runs on the JVM, in Node and in the browser, where a proxy
 on your own server lets a page fetch from sites that don't allow it.
-The only dependency is [whatwg-url](https://github.com/simongray/whatwg-url),
-which reads URLs the way browsers do.
+The only dependencies are [whatwg-url](https://github.com/simongray/whatwg-url)
+and [whatwg-mime](https://github.com/simongray/whatwg-mime), which read
+URLs and MIME types the way browsers do.
 
 > This library was spun out of [podcast-clj](https://github.com/simongray/podcast-clj),
 > a library for making podcast software, where it fetches feeds, media
@@ -34,7 +35,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.5.0"}
+dk.simongray/wary-fetch {:mvn/version "0.6.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -184,8 +185,8 @@ set up wrong, cap the wait with `:max-wait-seconds`, which both functions
 take, e.g. 3600 for an hour.
 
 The `dk.simongray.wary-fetch.headers` namespace has functions for the
-other headers of a response too, e.g. `headers/links` for a Link header
-and `headers/media-type` for a Content-Type.
+other headers of a response too, e.g. `headers/links` for a Link header.
+For a Content-Type, use `mime/extract` of whatwg-mime.
 
 Media files
 -----------

@@ -110,15 +110,15 @@
 (deftest the-answer-that-comes-back
   (let [{:keys [status headers body]} (proxy/ring-response (answers "https://a.example/feed.xml"))]
     (is (= 200 status))
-    (is (= "application/rss+xml; charset=utf-8" (get headers "Content-Type")) "the text goes as UTF-8")
+    (is (= "application/rss+xml;charset=utf-8" (get headers "Content-Type")) "the text goes as UTF-8")
     (is (= feed-xml (utf8 body)))
     (is (= ["\"v1\"" nil] [(get headers "etag") (get headers "set-cookie")]) "only the headers that it exposes")
     (is (= ["https://b.example/feed.xml" "https://b.example/feed.xml"]
            [(get headers "Content-Location") (get headers proxy/permanent-header)]))
     (is (= "default-src 'none'; sandbox" (get headers "Content-Security-Policy")) "a page that opens it runs no scripts"))
   (is (= mp3 (:body (proxy/ring-response (answers "https://a.example/ep.mp3")))) "bytes go as they came")
-  (is (= ["image/png" "application/feed+json; charset=utf-8" "text/vtt; charset=utf-8"]
-         (for [type ["image/png" "application/feed+json" "text/vtt; charset=ISO-8859-1"]]
+  (is (= ["image/png" "application/feed+json;charset=utf-8" "text/vtt;charset=utf-8;x=y"]
+         (for [type ["image/png" "application/feed+json" "text/vtt; charset=ISO-8859-1; x=y"]]
            (get-in (proxy/ring-response {:status 200 :headers {"content-type" [type]} :body "…"})
                    [:headers "Content-Type"])))
       "a charset only on a type of text, so a page that didn't ask for bytes isn't told that an image is text")

@@ -1,6 +1,6 @@
 (ns dk.simongray.wary-fetch.headers-test
-  "The values of headers: content ranges, media types, links, and when to
-  ask again by Retry-After, Cache-Control and Expires."
+  "The values of headers: content ranges, links, and when to ask again by
+  Retry-After, Cache-Control and Expires."
   (:require [clojure.test :refer [deftest is testing]]
             [dk.simongray.wary-fetch.headers :as headers]))
 
@@ -8,10 +8,6 @@
   (is (= {:start 0 :end 1023 :total 146515} (headers/content-range "bytes 0-1023/146515")))
   (is (= {:start 5 :end 9 :total nil} (headers/content-range "bytes 5-9/*")))
   (is (nil? (headers/content-range "bytes */1000")) "an unsatisfiable range names none"))
-
-(deftest media-types
-  (is (= "audio/mpeg" (headers/media-type "Audio/MPEG; charset=binary")))
-  (is (nil? (headers/media-type " ")) "no type"))
 
 (deftest when-to-ask-again
   (let [at #inst "2026-09-27T12:00:00Z"]

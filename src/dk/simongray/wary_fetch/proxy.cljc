@@ -12,7 +12,8 @@
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.headers :as headers]
             [dk.simongray.wary-fetch.redirect :as redirect]
-            [dk.simongray.wary-fetch.url :as url]))
+            [dk.simongray.wary-fetch.url :as url]
+            [dk.simongray.whatwg-mime :as mime]))
 
 (def defaults
   "The options of the proxy, which its own options replace one by one:
@@ -162,17 +163,15 @@
          (= "bytes" as)     (assoc :as :bytes)
          (= 1 (count asks)) (assoc :range asked))))))
 
-;; RFC 6839, sections 3.1 and 4.1: the +json and +xml suffixes
+;; MIME Sniffing, section 4.6, the groups of JSON, XML and JavaScript
 (defn- text-type?
-  "Whether the media type `type` holds text: a type of text, JSON or XML,
-  or one with a +json or +xml suffix."
-  [type]
-  (boolean (and type
-                (or (str/starts-with? type "text/")
-                    (contains? #{"application/json" "application/xml"
-                                 "application/javascript"}
-                               type)
-                    (re-find #"\+(?:json|xml)$" type)))))
+  "Whether the MIME type `m` holds text: a type of text, JSON, XML or
+  JavaScript."
+  [m]
+  (or (= "text" (:type m))
+      (mime/json? m)
+      (mime/xml? m)
+      (mime/javascript? m)))
 
 (defn ring-response
   "The Ring response that gives the page the `response` of its request,
@@ -191,11 +190,11 @@
   ([{:keys [status url permanent-url headers body] :as response}
     {:keys [expose] :or {expose (:expose defaults)} :as opts}]
    (let [type         (when (contains? expose "content-type")
-                        (headers/header headers "content-type"))
-         media        (headers/media-type type)
-         text         (when (and (string? body) (text-type? media))
-                        media)
-         content-type (if text (str text "; charset=utf-8") type)
+                        (mime/extract (get headers "content-type")))
+         content-type (mime/serialize
+                       (cond-> type
+                         (and (string? body) (text-type? type))
+                         (assoc-in [:parameters "charset"] "utf-8")))
          location     (when (redirect/statuses status)
                         (some->> (headers/header headers "location")
                                  (url/absolute-url url)))

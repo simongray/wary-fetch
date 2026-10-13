@@ -37,7 +37,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.11.1"}
+dk.simongray/wary-fetch {:mvn/version "0.12.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on

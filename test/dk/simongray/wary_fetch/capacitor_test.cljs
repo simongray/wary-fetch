@@ -6,6 +6,7 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.bytes :as bytes]
             [dk.simongray.wary-fetch.capacitor :as capacitor]
+            [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run]]
             [dk.simongray.wary-fetch.url :as url]))
 
@@ -137,3 +138,13 @@
              (fn [type] (is (= ::http/timeout type))))
      #(.then (failure-type send {:url "http://localhost/x" :allow-pred url/public?})
              (fn [type] (is (= ::http/refused type)))))))
+
+(deftest a-header-that-cant-be-sent-over-capacitor
+  (let [asked (atom [])
+        send  (capacitor/sender (plugin {} asked))]
+    (run
+     #(.then (http/try-send! send {:url "https://a.example/" :headers {"Authorization" (secret/hide "Bearer s3cr3t\n")}})
+             (fn [{:keys [error]}]
+               (is (= {:type ::http/invalid-header :url "https://a.example/" :header "Authorization"} (ex-data error)))
+               (is (not (re-find #"s3cr3t" (ex-message error))))
+               (is (empty? @asked) "the plugin gets no request, since a native client can throw with the value"))))))

@@ -164,6 +164,11 @@ The Authorization header that the request gets is hidden too. Use
 `http/revealed` to get a request with the texts of its hidden headers,
 e.g. for another HTTP client.
 
+A token that you read from a file often ends with a line break, which
+HTTP doesn't allow in a header. Trim it first, or the request throws with
+the `:type` `:dk.simongray.wary-fetch/invalid-header`. The exception names
+the header but not the token.
+
 When to ask again
 -----------------
 

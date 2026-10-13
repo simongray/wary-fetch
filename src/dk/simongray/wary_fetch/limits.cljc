@@ -1,8 +1,10 @@
 (ns ^:no-doc dk.simongray.wary-fetch.limits
   "The limits of an exchange, which every client keeps: where a request may
-  go, how long it may take and how much of a body it reads, and the
-  exceptions of the requests that go beyond them or never reach a server."
-  (:require [dk.simongray.wary-fetch :as-alias http]))
+  go, what its headers may hold, how long it may take and how much of a
+  body it reads, and the exceptions of the requests that go beyond them or
+  never reach a server."
+  (:require [dk.simongray.wary-fetch :as-alias http]
+            [dk.simongray.wary-fetch.secret :as secret]))
 
 (def default-max-bytes
   "How much of a response body is read at most, unless the request sets
@@ -14,6 +16,28 @@
   [url]
   (ex-info (str "The request to " url " is not allowed")
            {:type ::http/refused :url url}))
+
+;; RFC 9110, section 5.5. The JDK and node:http refuse these characters too
+;; (fetch refuses fewer), so none of them throws with the value.
+(defn unsendable-header
+  "The name of the first request header in `headers` whose value has a
+  character that HTTP doesn't allow (e.g. a line break), or nil for none."
+  [headers]
+  (some (fn [[k v]]
+          (when (re-find #"[^\t\x20-\x7E\x80-\xFF]" (str (secret/reveal v)))
+            k))
+        headers))
+
+(defn invalid-header
+  "The exception of a request to `url` whose `headers` have one that
+  unsendable-header finds. It names that header but leaves out the value,
+  which can be a secret (e.g. a token read from a file with its line
+  break)."
+  [url headers]
+  (let [k (unsendable-header headers)]
+    (ex-info (str "The request to " url " has a character in its " k
+                  " header that HTTP doesn't allow")
+             {:type ::http/invalid-header :url url :header k})))
 
 (defn too-large
   "The exception of a response body from `url` that holds more than

@@ -145,14 +145,24 @@
 
 (defn send!
   "A promise of the response to `request`, sent with fetch within
-  `timeout-seconds`, unless `allow-pred` refuses its URL."
+  `timeout-seconds`, unless `allow-pred` refuses its URL.
+
+  A header value that the JDK and node:http refuse (e.g. one with a line
+  break) rejects with ::invalid-header before fetch sees it, since Node's
+  fetch throws with the value."
   [request timeout-seconds allow-pred]
   ;; so that the browser's parser, which reads the URL again, reads the
   ;; host that was checked
   (let [{:keys [method url headers body max-redirects] :as request}
         (update request :url url/legal-url)]
-    (if-not (allow-pred url)
+    (cond
+      (not (allow-pred url))
       (js/Promise.reject (limits/refusal url))
+
+      (limits/unsendable-header headers)
+      (js/Promise.reject (limits/invalid-header url headers))
+
+      :else
       (let [signal (js/AbortSignal.timeout (* 1000 timeout-seconds))
             init   (cond-> {:method  (str/upper-case (name (or method :get)))
                             :headers headers

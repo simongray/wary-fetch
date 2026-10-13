@@ -91,11 +91,18 @@
   "A promise of the answer of the plugin `http` to `request`, its headers,
   the redirects before it and the last request, as a vector. It follows
   the redirects until the instant `deadline` and checks each URL with
-  `allow-pred`."
+  `allow-pred`. A header value that the JDK and node:http refuse rejects
+  with ::invalid-header, since a native client can throw with the value."
   [^js http request deadline allow-pred]
-  (letfn [(step [{:keys [url] :as request} chain]
-            (if-not (allow-pred url)
+  (letfn [(step [{:keys [url headers] :as request} chain]
+            (cond
+              (not (allow-pred url))
               (js/Promise.reject (limits/refusal url))
+
+              (limits/unsendable-header headers)
+              (js/Promise.reject (limits/invalid-header url headers))
+
+              :else
               (let [left (- deadline (js/Date.now))]
                 (-> (within (.request http (options request left))
                             deadline

@@ -208,7 +208,9 @@
   vector of its status, URL and headers. It follows the redirects itself,
   since the JDK sends credentials on to another origin. A URL that
   `allow-pred` refuses throws ::refused, or ::unresolved when its host is
-  a name that doesn't resolve, as url/public? refuses such a name."
+  a name that doesn't resolve, as url/public? refuses such a name. A
+  header value that the JDK would refuse throws ::invalid-header, since
+  the JDK's own exception shows the value."
   [request deadline allow-pred]
   (loop [request (update request :url url/legal-url)
          chain   []]
@@ -221,6 +223,8 @@
         (throw (if (unresolved? uri)
                  (limits/unresolved url nil)
                  (limits/refusal url))))
+      (when (limits/unsendable-header headers)
+        (throw (limits/invalid-header url headers)))
       (let [outgoing (java-request uri method headers body left)
             response (try
                        (.send ^HttpClient @client outgoing

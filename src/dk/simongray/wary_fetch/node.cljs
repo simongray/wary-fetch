@@ -287,11 +287,16 @@
   "A promise of the answer to `request` before its body is read, the
   redirects before it and the last request, as a vector. It follows the
   redirects until the instant `deadline` and checks each URL with
-  `allow-pred`."
+  `allow-pred`. A header value that node:http would refuse rejects with
+  ::invalid-header, as on the JVM."
   [request deadline allow-pred]
-  (letfn [(step [{:keys [url] :as request} chain]
+  (letfn [(step [{:keys [url headers] :as request} chain]
             (-> (checked! url allow-pred deadline)
-                (.then #(open! request % deadline (fn [] (limits/late url))))
+                (.then (fn [addresses]
+                         (when (limits/unsendable-header headers)
+                           (throw (limits/invalid-header url headers)))
+                         (open! request addresses deadline
+                                (fn [] (limits/late url)))))
                 (.catch #(throw (connect-failure url %)))
                 (.then (fn [{:keys [status headers] :as opened}]
                          (let [location (headers/header headers "location")

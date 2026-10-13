@@ -149,7 +149,10 @@
   gives a redirect as a response with the status 0.
 
   It throws ::timeout or ::too-large past a limit and ::refused when
-  :allow-pred refuses a URL. A request that reaches no server throws
+  :allow-pred refuses a URL. A header value with a character that HTTP
+  doesn't allow (e.g. a line break) throws ::invalid-header, which names
+  the header but leaves out the value. A request that reaches no server
+  throws
   ::unresolved when the name of the host doesn't resolve, ::unreachable
   when the host can't be reached and ::tls when the secure connection
   fails, e.g. over an expired certificate. A browser tells none of these

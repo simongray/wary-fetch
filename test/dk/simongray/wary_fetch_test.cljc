@@ -6,6 +6,7 @@
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
+            [dk.simongray.wary-fetch.limits :as limits]
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.wary-fetch.test-support :refer [run #?(:clj with-file-server)]]
@@ -152,6 +153,51 @@
   (is (= ["https://host.example/" {:username "user" :password (secret/hide "")}] (url/split-credentials "https://user@host.example/")))
   (is (= ["https://host.example/a@b" nil] (url/split-credentials "https://host.example/a@b")) "an @ in the path is no user")
   (is (= ["https://host.example/feed.xml" nil] (url/split-credentials "https://host.example/feed.xml"))))
+
+(def token
+  "A token as slurp reads it from a file, with a line break at its end."
+  "s3cr3t-71a8c14c\n")
+
+(defn- shows-token?
+  "Whether the text `s` has the token, or a part of it."
+  [s]
+  (boolean (re-find #"s3cr3t|71a8|c14c" (str s))))
+
+(defn- check-hidden
+  "Check that the `error` of a request with the token in its header
+  `header-name` names the header but shows no part of the token."
+  [error header-name]
+  (is (= {:type ::http/invalid-header :header header-name} (select-keys (ex-data error) [:type :header])))
+  (doseq [[way written] {"the message" (ex-message error)
+                         "the data"    (pr-str (ex-data error))
+                         "the causes"  (async/explain error)
+                         "the failure" (pr-str (http/failure error))}]
+    (is (not (shows-token? written)) (str header-name ": " way))))
+
+(deftest a-header-that-cant-be-sent
+  (testing "a header holds tabs, spaces, visible characters and Latin-1, but no control characters"
+    (is (nil? (limits/unsendable-header {"Accept" "*/*" "X-Text" "a\tb øÿ " "X-Empty" ""})))
+    (doseq [[what v] {"a line break"               "a\nb"
+                      "a carriage return"          "a\r"
+                      "a NUL"                      "\u0000"
+                      "another control character"  "a\u0001"
+                      "DEL"                        "a\u007f"
+                      "a character beyond Latin-1" "a€"}]
+      (is (= "X-Text" (limits/unsendable-header {"Accept" "*/*" "X-Text" v})) what)))
+  (let [url     "http://127.0.0.1:1/"
+        request (fn [headers] {:url url :headers headers :allow-pred (constantly true)})
+        failed  (fn [send header-name]
+                  #(async/then (async/attempt send)
+                               (fn [{:keys [error]}] (check-hidden error header-name))))]
+    (run (failed #(http/send! (request {"Authorization" (secret/hide (str "Bearer " token))})) "Authorization")
+         (failed #(http/fetch! url {:credentials {:token token} :allow-pred (constantly true)}) "Authorization")
+         (failed #(http/send! (request {"Cookie" (str "id=" token "X-Injected: 1")})) "Cookie")
+         (failed #(http/send! (request {"X-Api-Key" (str token "€")})) "X-Api-Key")
+         #?@(:clj  [(failed #(http/digest! url ["SHA-256"] {:headers {"Authorization" (secret/hide token)} :allow-pred (constantly true)})
+                            "Authorization")]
+             ;; Node's fetch throws with a value that has a line break inside
+             :cljs [(failed #(browser/send! (http/prepared (request {"Cookie" (str "id=" token "X-Injected: 1")})) 5 (constantly true))
+                            "Cookie")]))))
 
 (deftest the-request-of-a-fetch
   (let [request (http/fetch-request "https://u:p@example.org/feed.xml"

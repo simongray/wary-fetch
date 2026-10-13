@@ -253,11 +253,6 @@
          (.append sb "null")
          (.append sb (str (if (ratio? x) (double x) x))))
 
-       (inst? x)
-       (write-string! sb (.format ^DateTimeFormatter instant-format
-                                  (.atOffset (Instant/ofEpochMilli (inst-ms x))
-                                             ZoneOffset/UTC)))
-
        (map? x)
        (do (.append sb \{)
            (reduce (fn [first? [k v]]
@@ -279,6 +274,13 @@
                    true
                    x)
            (.append sb \]))
+
+       ;; after maps and collections, since inst? is a satisfies? check,
+       ;; which takes microseconds for a type that doesn't satisfy it
+       (inst? x)
+       (write-string! sb (.format ^DateTimeFormatter instant-format
+                                  (.atOffset (Instant/ofEpochMilli (inst-ms x))
+                                             ZoneOffset/UTC)))
 
        :else
        (write-string! sb (str x)))))

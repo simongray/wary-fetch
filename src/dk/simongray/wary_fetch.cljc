@@ -23,7 +23,7 @@
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.6.2")
+  "wary-fetch/0.7.0")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."
@@ -90,6 +90,20 @@
     #?@(:clj  [range (assoc "Accept-Encoding" "identity")]
         :cljs [(and range node?) (assoc "Accept-Encoding" "identity")])))
 
+(defn ^:no-doc prepared
+  "The `request` as a client sends it: its method a keyword in lower case,
+  the headers that request-headers gives it, its :query-params in its URL,
+  :max-bytes by default, and its hidden texts revealed."
+  [{:keys [method headers query-params] :as request}]
+  (let [agent (or (:user-agent request) user-agent)]
+    (-> (merge {:max-bytes limits/default-max-bytes} request)
+        (assoc :method  (some-> method name str/lower-case keyword)
+               :headers (request-headers headers (:range request) agent))
+        (cond-> query-params
+          (update :url url/with-query query-params))
+        (dissoc :query-params)
+        revealed)))
+
 (defn send!
   "Send the `request` and give the response (or in ClojureScript a promise
   of it).
@@ -141,19 +155,10 @@
   fails, e.g. over an expired certificate. A browser tells none of these
   apart, but gives ::unreachable when it knows that the device is
   offline."
-  [{:keys [method headers timeout-seconds allow-pred as query-params]
+  [{:keys [timeout-seconds allow-pred as]
     :or   {timeout-seconds 30 allow-pred (constantly true)}
     :as   request}]
-  (let [method  (some-> method name str/lower-case keyword)
-        agent   (or (:user-agent request) user-agent)
-        request (-> (merge {:max-bytes limits/default-max-bytes} request)
-                    (assoc :method  method
-                           :headers (request-headers headers (:range request)
-                                                     agent))
-                    (cond-> query-params
-                      (update :url url/with-query query-params))
-                    (dissoc :query-params)
-                    revealed)
+  (let [request (prepared request)
         sent    #?(:clj  (jvm/send! request timeout-seconds allow-pred)
                    :cljs (if node?
                            (node/send! request timeout-seconds allow-pred)

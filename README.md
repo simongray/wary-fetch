@@ -35,7 +35,7 @@ add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
 `:deps` in your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.6.2"}
+dk.simongray/wary-fetch {:mvn/version "0.7.0"}
 ```
 
 For changes that aren't released yet, use the SHA of the latest commit on
@@ -287,6 +287,27 @@ user's own device rather than from your server. CORS also hides the
 headers that a server doesn't expose, and `:filtered?` marks such a
 response.
 
+In a Capacitor app, CORS applies to the web view too. Send through the
+native HTTP of the CapacitorHttp plugin instead, with the guards of Node
+but for the lookup of names:
+
+```clojure
+(require '["@capacitor/core" :refer [CapacitorHttp]]
+         '[dk.simongray.wary-fetch.capacitor :as capacitor])
+
+(http/fetch! "https://example.com/feed.xml"
+             {:send (capacitor/sender CapacitorHttp)})
+```
+
+The plugin hands each body over whole, so leave large files such as
+episodes to a plugin for file transfers.
+
+In an Electron app, the page sends through the main process, where Node
+sends with all its guards. Give the main process `electron/handler` and
+the page `electron/sender`, as the namespace's docstring shows. The
+handler keeps its own limits, whatever a page asks, so a page can't reach
+the network of the computer.
+
 Principles
 ----------
 
@@ -310,7 +331,7 @@ clojure -M:cljs compile test  # the tests in Node
 ```
 
 The public namespaces are the root, `headers`, `url`, `proxy`, `async`,
-`secret`, `bytes` and `json`. The others are internal: `jvm`, `node` and
+`secret`, `bytes`, `json`, `capacitor` and `electron`. The others are internal: `jvm`, `node` and
 `browser` are the clients of each platform, `redirect` and `limits` hold
 the rules that the clients share, and `date` and `encoding` are helpers.
 

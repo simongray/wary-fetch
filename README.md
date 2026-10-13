@@ -344,6 +344,16 @@ Principles
   host that a browser would read as an IP address, e.g. 0x7f.1, is checked
   as one.
 
+Versions
+--------
+
+Until 1.0, a release that changes the API gets a new minor version, e.g.
+from 0.4.2 to 0.5.0, and one that only fixes gets a new patch version,
+e.g. from 0.4.2 to 0.4.3. A function that's renamed or removed goes
+without a deprecated alias, and the commit of each release says what
+changed. The tests run in CI on Java 11 and 25, in Node and in a
+headless Chrome.
+
 Development
 -----------
 

@@ -195,8 +195,9 @@
 
 (defn- settled-by
   "The promise `p`, or one that rejects with the reason of the AbortSignal
-  `signal` once it aborts, whichever settles first. The fetch of Expo
-  doesn't reject when its signal aborts before the answer comes."
+  `signal` once it aborts, whichever settles first. Outside a browser,
+  e.g. in Expo, fetch can ignore a signal that aborts before the answer
+  comes."
   [p ^js signal]
   (let [listener (volatile! nil)
         aborted  (js/Promise.
@@ -300,5 +301,6 @@
                           #(vector % [] request))))
           (following! request signal allow-pred))
         (.then (fn [[res chain last-request]] (answer res chain last-request)))
-        (settled-by signal)
+        ;; a browser's fetch rejects as its signal aborts
+        (cond-> (not available?) (settled-by signal))
         (.catch #(throw (failed %))))))

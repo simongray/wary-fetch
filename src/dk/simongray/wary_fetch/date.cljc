@@ -1,11 +1,11 @@
 (ns ^:no-doc dk.simongray.wary-fetch.date
   "The dates of HTTP headers, by RFC 9110, section 5.6.7: the IMF-fixdate,
-  and the obsolete forms of RFC 850 and asctime, which a recipient must
-  read too.
+  and the obsolete forms of RFC 850 and asctime, which a recipient has to
+  parse too.
 
-  Servers write them a little wrong at times, so a missing weekday, one
-  digit of a day or an hour, and a zone of UTC or an offset are read too.
-  A zone that isn't known reads as UTC."
+  Servers sometimes write them a little wrong, so the parser also accepts
+  a missing weekday, a day or an hour of one digit, and a zone of UTC or
+  an offset. A zone that isn't known reads as UTC."
   (:require [clojure.string :as str]))
 
 (def months
@@ -93,7 +93,7 @@
 
 (defn epoch-ms
   "The date of a header `s` in epoch milliseconds, or nil when it isn't a
-  date, or names a day or a time that doesn't exist."
+  date or names a day or a time that doesn't exist."
   [s]
   (when-let [[day month year hours minutes seconds zone] (some-> s parts)]
     (let [m                           (months (str/lower-case month))

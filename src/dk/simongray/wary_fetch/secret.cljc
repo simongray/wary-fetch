@@ -2,14 +2,14 @@
   "Texts that print as #<secret> (e.g. a password or a token) so that a log
   or a REPL doesn't show them.
 
-  The reader can't read #<secret>. So a map with a hidden text that goes to
-  a file as EDN fails to read back instead of coming back without its
-  secret. A debugger or a browser's console still shows the text because
-  it shows the fields of an object."
+  The reader can't read #<secret>. So when you write a map with a secret
+  to a file as EDN, it fails to read back rather than coming back without
+  the secret. A debugger or a browser's console still shows the text,
+  since it shows the fields of an object."
   #?(:clj (:import [java.io Writer])))
 
 (def ^:no-doc shown
-  "What the printer writes in the place of a hidden text."
+  "What the printer writes in place of a text hidden with hide."
   "#<secret>")
 
 #?(:clj
@@ -46,13 +46,13 @@
      (.write writer ^String shown)))
 
 (defn hidden?
-  "Whether `x` is a hidden text."
+  "Whether `x` is a text hidden with hide."
   [x]
   (instance? Hidden x))
 
 (defn hide
-  "The text `s` as a value that the printer doesn't show. A hidden text
-  stays as it is, and so does nil. Two hidden texts are equal when their
+  "The text `s` as a value that prints as #<secret>. Nil and a text that's
+  already hidden stay as they are. Two such values are equal when their
   texts are."
   [s]
   (if (or (nil? s) (hidden? s))
@@ -60,8 +60,8 @@
     (->Hidden s)))
 
 (defn reveal
-  "The text that `x` hides. A value that isn't hidden stays as it is, so
-  the function takes a plain text too."
+  "The text hidden in `x`, or `x` itself when it isn't hidden, e.g. a
+  plain text."
   [x]
   (if (hidden? x)
     (.-text ^Hidden x)

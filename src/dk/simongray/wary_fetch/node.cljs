@@ -1,7 +1,8 @@
 (ns ^:no-doc dk.simongray.wary-fetch.node
-  "The client of Node: node:dns looks up the names, and node:http and
-  node:https connect only to the addresses that were looked up. Redirects
-  are followed here, and bodies read within the limits of time and size.
+  "The client in Node: node:dns looks up the names, and node:http and
+  node:https connect only to the addresses that it returned. This
+  namespace follows redirects itself and reads bodies within the limits of
+  time and size.
 
   The modules load when they're first used, so a page that holds this
   code loads none of them."
@@ -27,7 +28,7 @@
     (js/require module-name)))
 
 (defn- by-deadline
-  "The promise `p`, or one that rejects with what `late` gives at the
+  "The promise `p`, or one that rejects with what `late` returns at the
   instant `deadline` in epoch milliseconds, whichever settles first."
   [p deadline late]
   (let [timer (volatile! nil)]
@@ -41,7 +42,7 @@
 
 (defn lookup!
   "A promise of the addresses that the domain name `host` resolves to,
-  before the instant `deadline` or else rejected with what `late` gives.
+  before the instant `deadline` or else rejected with what `late` returns.
   Each address is a map of its text as :address and its :family, 4 or 6."
   [host deadline late]
   (-> (.lookup (.-promises (module "node:dns")) host #js {:all true})
@@ -90,10 +91,9 @@
   of its :status and :headers, and what close! and read! take. The
   connection goes only to the `addresses`, unless they're nil.
 
-  The exchange, the body of the answer included, ends at the instant
-  `deadline` in epoch milliseconds, with the exception that `late` gives,
-  or when the AbortSignal of the :signal of the request aborts, with
-  ::aborted."
+  The exchange, the answer's body included, ends at the instant `deadline`
+  in epoch milliseconds with the exception that `late` returns, or with
+  ::aborted when the request's :signal aborts."
   [{:keys [url signal] :as request} addresses deadline late]
   (js/Promise.
    (fn [resolve reject]
@@ -128,16 +128,16 @@
        (.end req)))))
 
 (defn close!
-  "Close the `answer` that open! gave, without reading the rest of it."
+  "Close the `answer` that open! returned, without reading the rest of it."
   [{:keys [^js response timer]}]
   (js/clearTimeout timer)
   (.destroy response))
 
 (defn read!
-  "A promise of the bytes of the body of the `answer` that open! gave:
+  "A promise of the bytes of the body of the `answer` that open! returned:
   the first `n` of them, the rest left unread, or with nil `n` the whole
   body. Once more than `max-bytes` arrive, it rejects with what
-  `too-large` gives."
+  `too-large` returns."
   [{:keys [^js response timer fate]} n max-bytes too-large]
   (js/Promise.
    (fn [resolve reject]
@@ -171,9 +171,9 @@
                                 (js/Error. "The answer ended early"))))))))
 
 (defn- given!
-  "Give the `piece` of a body to `sink`, a function of each piece or a
-  writable stream, and give what to wait for before the next piece: the
-  promise that the function gives, or the drain of a full stream."
+  "Pass the `piece` of a body to `sink` (a function of each piece or a
+  writable stream), and return what to wait for before the next piece:
+  the promise that the function returns, or the drain of a full stream."
   [sink piece]
   (if (fn? sink)
     (sink piece)
@@ -181,11 +181,11 @@
       (js/Promise. (fn [resolve] (.once ^js sink "drain" resolve))))))
 
 (defn pour!
-  "A promise of how many bytes of the body of the `answer` that open! gave
-  went to `sink`, as given! gives them, with gzip undone when it's
+  "A promise of how many bytes of the body of the `answer` that open!
+  returned went to `sink` through given!, with gzip undone when it's
   `gzipped?`: the first `n` of them, the rest left unread, or with nil `n`
   the whole body. Once more than `max-bytes` arrive, it rejects with what
-  `too-large` gives."
+  `too-large` returns."
   [{:keys [^js response timer fate]} n max-bytes gzipped? sink too-large]
   (js/Promise.
    (fn [resolve reject]
@@ -242,12 +242,12 @@
         (throw e)))))
 
 (defn- checked!
-  "A promise of the addresses that the request to `url` may connect to,
-  once `allow-pred` took the URL, by the instant `deadline`, or of nil for
-  a host that's an address. It rejects with ::refused when `allow-pred`
-  refuses the URL.
+  "A promise of the addresses that the request to `url` may connect to
+  once `allow-pred` accepts the URL, by the instant `deadline`, or of nil
+  for a host that's an address. It rejects with ::refused when
+  `allow-pred` refuses the URL.
 
-  A name is looked up first, so that url/public? checks its addresses
+  It looks up a name first, so that url/public? checks its addresses
   too."
   [url allow-pred deadline]
   (let [host (some-> (url/host url) (str/replace #"\.$" ""))
@@ -295,8 +295,8 @@
   redirects until the instant `deadline` and checks each URL with
   `allow-pred`, unless the :signal of the request aborted. A header value
   that node:http would refuse rejects with ::invalid-header, as on the
-  JVM. The :prepare-fn of the request, when it has one, gives the request
-  of each hop."
+  JVM. The :prepare-fn of the request, when it has one, returns the
+  request of each hop."
   [request deadline allow-pred]
   (letfn [(step [request chain]
             (.then (redirect/hop request)
@@ -327,7 +327,7 @@
                                                               target)
                                        (conj chain
                                              [status url headers])))))))))]
-    ;; so that Node's own parser, which reads the URL again, reads the host
+    ;; so that Node's own parser, which parses the URL again, gets the host
     ;; that was checked
     (step (update request :url url/legal-url) [])))
 
@@ -402,7 +402,7 @@
   "A promise of the response to `request`, sent with node:http within
   `timeout-seconds`, to URLs that `allow-pred` takes.
 
-  Gzip is accepted unless the headers name an Accept-Encoding."
+  It accepts gzip unless the headers name an Accept-Encoding."
   [{:keys [headers] :as request} timeout-seconds allow-pred]
   (let [deadline (+ (js/Date.now) (* 1000 timeout-seconds))
         named?   (some #(= "accept-encoding" (str/lower-case (str %)))

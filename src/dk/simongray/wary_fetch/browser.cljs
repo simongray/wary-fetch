@@ -1,8 +1,7 @@
 (ns ^:no-doc dk.simongray.wary-fetch.browser
-  "The client of a browser, and of a runtime without the modules of Node:
-  fetch, which follows redirects itself, and which lets a page read an
-  answer from another site only as far as the CORS headers of the answer
-  allow."
+  "The client in a browser, or in a runtime without Node's modules: fetch,
+  which follows redirects itself and lets a page read an answer from
+  another site only as far as the answer's CORS headers allow."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]
@@ -18,11 +17,11 @@
 
 (defn- read-body
   "A promise of the body of the fetch response `res` from `url` as bytes,
-  as much as `opts` say:
+  as much of it as `opts` ask for:
 
-  - With :first, it's that many bytes from the start, and the rest is left
+  - With :first, it's that many bytes from the start, and the rest stays
     unread.
-  - With :max-bytes, it's the whole body, and the promise is rejected with
+  - With :max-bytes, it's the whole body, and the promise rejects with
     ::too-large once more bytes arrive.
   - Without either, it's the whole body."
   [^js res url {:keys [max-bytes] :as opts}]
@@ -60,10 +59,10 @@
 
 (defn- pour-body
   "A promise of how many bytes of the body of the fetch response `res` from
-  `url` went to `sink`, a function of each piece that can give a promise to
-  wait for: the first `n` of them, the rest left unread, or with nil `n`
-  the whole body, rejected with ::too-large once more than `max-bytes`
-  arrive."
+  `url` went to `sink`, a function of each piece that can return a promise
+  to wait for. The sink gets the first `n` bytes and the rest stays
+  unread, or with nil `n` it gets the whole body. The promise rejects with
+  ::too-large once more than `max-bytes` arrive."
   [^js res url n max-bytes sink]
   (let [reader (.getReader (.-body res))
         cancel #(.catch (.cancel reader) (fn [_] nil))]
@@ -137,8 +136,8 @@
 
 (defn- offline?
   "Whether the fetch failed with `e` since the device is offline. Fetch
-  says nothing more of why a request failed, but the browser knows when
-  it has no network."
+  doesn't report why a request failed, but the browser reports when it
+  has no network."
   [e]
   (and (instance? js/TypeError e)
        (exists? js/navigator)
@@ -146,9 +145,9 @@
 
 ;; DOM Standard, section 3.1: AbortSignal.any
 (defn- both
-  "An AbortSignal that aborts when `timeout` does, or the AbortSignal
-  `stop` when there is one, as AbortSignal.any makes it, or by hand in a
-  browser without it."
+  "An AbortSignal that aborts when `timeout` or the AbortSignal `stop`
+  does, if there is one. It makes the signal with AbortSignal.any, or by
+  hand in a browser without it."
   [^js timeout ^js stop]
   (cond
     (nil? stop)                timeout
@@ -165,7 +164,7 @@
   "A promise of the response to the `request` of a single hop, sent with
   fetch within `timeout-seconds`, unless `allow-pred` refuses its URL."
   [request timeout-seconds allow-pred]
-  ;; so that the browser's parser, which reads the URL again, reads the
+  ;; so that the browser's parser, which parses the URL again, gets the
   ;; host that was checked
   (let [{:keys [method url headers body max-redirects] stop :signal
          :as   request}
@@ -208,8 +207,8 @@
   ::aborted when the AbortSignal of its :signal aborts.
 
   A header value that the JDK and node:http refuse (e.g. one with a line
-  break) rejects with ::invalid-header before fetch sees it, since Node's
+  break) rejects with ::invalid-header before fetch gets it, since Node's
   fetch throws with the value. Fetch follows the redirects itself, so the
-  :prepare-fn of the request gives the request of the first hop alone."
+  :prepare-fn of the request returns the request of the first hop alone."
   [request timeout-seconds allow-pred]
   (.then (redirect/hop request) #(fetch! % timeout-seconds allow-pred)))

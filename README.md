@@ -4,7 +4,7 @@ wary-fetch
 [![Clojars Project](https://img.shields.io/clojars/v/dk.simongray/wary-fetch.svg)](https://clojars.org/dk.simongray/wary-fetch)
 
 This is a Clojure and ClojureScript library for fetching URLs that
-strangers give you, e.g. a feed URL that a user types in, or a link in a
+strangers give you, e.g. a feed URL that a user types in or a link in a
 document you fetched. Requests and responses are plain maps.
 
 - **Only the public internet, if you ask.** A stranger's URL can't reach
@@ -19,7 +19,7 @@ document you fetched. Requests and responses are plain maps.
 The same code runs on the JVM, in Node and in the browser, where a proxy
 on your own server lets a page fetch from sites that don't allow it. It
 depends only on [whatwg-url](https://github.com/simongray/whatwg-url) and
-[whatwg-mime](https://github.com/simongray/whatwg-mime), which read URLs
+[whatwg-mime](https://github.com/simongray/whatwg-mime), which parse URLs
 and MIME types the way browsers do, and on
 [webcrypto-clj](https://github.com/simongray/webcrypto-clj) for bytes and
 their encodings.
@@ -75,8 +75,8 @@ instead:
 ```
 
 The check is the `:allow-pred` option, a predicate of the URL and of each
-redirect, which is `url/public?` unless you give another. To fetch from
-your own network, give one that allows it, e.g. `(constantly true)`.
+redirect, which is `url/public?` unless you pass another. To fetch from
+your own network, pass one that allows it, e.g. `(constantly true)`.
 
 Polling
 -------
@@ -107,7 +107,7 @@ The wait is as long as the server says. To poll a server that might be
 set up wrong, cap it with the `:max-wait-seconds` option of either
 function, e.g. 3600 for an hour.
 
-The `headers` namespace reads the other headers of a response too, e.g.
+The `headers` namespace parses the other headers of a response too, e.g.
 a Link header with `headers/links`. For a Content-Type, use whatwg-mime.
 
 Requests
@@ -129,20 +129,20 @@ you send with `http/send!`. It can also have these keys:
 - `:sink`, to take the body in pieces, see [Media files](#media-files)
 - `:signal`, to stop the exchange, e.g. when the user cancels: an
   AbortSignal in ClojureScript, or on the JVM an atom that turns true
-- `:prepare-fn`, a function that returns the request of each hop, the
-  first and each redirect, e.g. to sign it for its own URL, as
-  [httpsig-clj](https://github.com/simongray/httpsig-clj) does
+- `:prepare-fn`, a function that returns the request to send for each
+  hop (the first and each redirect), e.g. to sign each hop for its own
+  URL as [httpsig-clj](https://github.com/simongray/httpsig-clj) does
 
-A request to any URL goes through, unless its `:allow-pred` says
+A request to any URL goes through unless its `:allow-pred` says
 otherwise. To send one to the public internet only, as `http/fetch!`
 does, use `http/send-public!`. An answer with an error status, e.g. a
 404, is a response like any other.
 
 The functions that make a request for you take its limits,
-`:allow-pred` and `:user-agent` as options, and `http/with-options` puts
-the same options on a request of your own. Besides those,
-`http/fetch!` takes `:credentials`, `:accept`, and a `:send` that sends
-its request in place of `http/send!`, e.g. through [the
+`:allow-pred` and `:user-agent` as options. To put the same options on
+a request of your own, use `http/with-options`. Besides those,
+`http/fetch!` takes `:credentials`, `:accept` and a `:send` to use in
+place of `http/send!`, e.g. one that sends through [the
 proxy](#the-proxy).
 
 ### Posting data
@@ -156,7 +156,7 @@ request with one of these:
 - `http/multipart-request` for files beside the fields of a form, e.g. a
   photo to upload.
 
-A map or another collection as the body throws, rather than be sent as
+A map or another collection as the body throws rather than going out as
 its printed text. The `json` namespace reads and writes JSON on every
 platform, with no library to add. For the hashes, HMACs and random bytes
 that signatures and tokens need, use webcrypto-clj.
@@ -179,9 +179,9 @@ credentials
 (http/fetch! "https://example.com/private.xml" {:credentials credentials})
 ```
 
-The Authorization header of the request is hidden too, and it stays
-behind when a redirect leaves the site. For another HTTP client, get the
-texts of the hidden headers back with `http/revealed`.
+The request's Authorization header is hidden too, and it stays behind
+when a redirect leaves the origin. To send the request with another HTTP
+client, reveal its hidden headers and body with `http/revealed`.
 
 A token that you read from a file often ends with a line break, which
 HTTP doesn't allow in a header, so trim it first. Otherwise the request
@@ -190,29 +190,29 @@ throws, and the exception names the header but not the token.
 Failures
 --------
 
-A request that fails throws an ex-info, or in ClojureScript rejects with
-one. Its `:type` says why, as a keyword in the `dk.simongray.wary-fetch`
+A request that fails throws an ex-info (in ClojureScript it rejects with
+one). Its `:type` says why, as a keyword in the `dk.simongray.wary-fetch`
 namespace:
 
 - **refused**: the `:allow-pred` refused the URL or a redirect.
 - **timeout** or **too-large**: the exchange took longer than its
   `:timeout-seconds`, or the body held more than its `:max-bytes`.
 - **aborted**: the `:signal` stopped the exchange.
-- **unresolved**, **unreachable** or **tls**: the name of the host
-  doesn't resolve, the host can't be reached, or the secure connection
-  failed, e.g. over an expired certificate. So you can tell a dead
-  network from a dead server, and a dead server from a bad certificate.
+- **unresolved**, **unreachable** or **tls**: the host's name doesn't
+  resolve, the host can't be reached or the secure connection failed
+  (e.g. over an expired certificate). So you can tell a dead network
+  from a dead server, and a dead server from a bad certificate.
 - **invalid-header** or **invalid-body**: the request can't be sent as
   it is, e.g. with a line break in a header or a map as the body.
 
-A browser doesn't say why a request failed, but when it knows that the
-device is offline, the type is unreachable.
+A browser doesn't report why a request failed. When it reports the
+device as offline, the type is unreachable.
 
 To get the exception in a map rather than as a throw, use
-`http/try-send!`. On the JVM, it gives the map in a future, so that
+`http/try-send!`. On the JVM it returns the map in a future, so that
 several requests can be under way at once. To turn an exception into
-data, use `http/failure`, and to tell a timeout, including one from the
-platform's own client, use `http/timeout?`.
+data, use `http/failure`. To check for a timeout, including one from
+the platform's own client, use `http/timeout?`.
 
 Media files
 -----------
@@ -234,8 +234,8 @@ which sends a HEAD request and a request for the first two bytes:
 To download a file without holding it in memory, give the request a
 `:sink`, which can be:
 
-- a function of the bytes of each piece, which in ClojureScript can give
-  a promise for the next piece to wait for
+- a function of the bytes of each piece, which in ClojureScript can
+  return a promise to wait for before the next piece
 - an OutputStream on the JVM
 - a writable stream in Node
 
@@ -254,24 +254,25 @@ The response then has no body, but the number of bytes that the sink
 ;; => 104793
 ```
 
-The limits apply to the sink too, which is why the example sets
-`:max-bytes` to nil, for a file that can be larger than 100 MB. Only the body of
-a success goes to the sink, so a 404 still gives its page as the body.
+The limits apply to the sink too, so the example sets `:max-bytes` to
+nil for a file that can be larger than 100 MB. Only the body of a
+success goes to the sink, so a 404 still has its page as the body.
 
 To resume a download that broke off, ask for the rest with a `:range`
-and an If-Range header, which `headers/if-range` makes from the headers of
-the first answer. It's nil when they can't tell whether the file is still
-the same, and the download then starts again. To read a file in parts by
-byte range, use `http/fetcher`. On the JVM, `http/digest!` gives a SHA-256
-or another digest of a file as it streams past.
+and an If-Range header, which `headers/if-range` makes from the headers
+of the first answer. It returns nil when those headers can't show that
+the file is unchanged. In that case, start the download again. To read
+a file in parts by byte range, use `http/fetcher`. On the JVM,
+`http/digest!` computes a SHA-256 or another digest of a file as it
+streams past.
 
 The proxy
 ---------
 
 A web page can only read an answer from another site when that site
 allows it with CORS headers, and most don't. To fetch from them anyway,
-make a Ring handler with `proxy/handler`, and mount it on your own
-server, behind your login, at a route such as `/proxy`:
+make a Ring handler with `proxy/handler` and mount it on your own server
+(behind your login) at a route such as `/proxy`:
 
 ```clojure
 (require '[dk.simongray.wary-fetch.proxy :as proxy])
@@ -280,10 +281,10 @@ server, behind your login, at a route such as `/proxy`:
   (proxy/handler))
 ```
 
-The handler fetches the URL of its `url` parameter, if that URL is on the
-public internet, and answers with what came back. In the page, send each
-request through it with `proxy/sender`, and you get the response that a
-direct request would give:
+The handler fetches the URL in its `url` parameter when that URL is on
+the public internet, and answers with what came back. In the page, send
+each request through it with `proxy/sender` to get the response that a
+direct request would return:
 
 ```clojure
 (http/fetch! "https://example.com/feed.xml"
@@ -302,38 +303,39 @@ a Range header too, so that a download can resume. Its options are in
 In ClojureScript
 ----------------
 
-The functions that send give promises in ClojureScript. To write code for
-both platforms at once, chain them with `async/then`, which takes a
+The functions that send return promises in ClojureScript. To write code
+for both platforms at once, chain them with `async/then`, which takes a
 value, a future or a promise alike. The `async` namespace has a few more
 functions like it.
 
 ### Node
 
-In Node, requests go through node:http, with the guards of the JVM. The
-library looks up the name of the host before it asks the `:allow-pred`,
-so that `url/public?` checks every address of the name, and then connects
-only to those addresses. It also follows the redirects itself, and asks
-the `:allow-pred` about each.
+In Node, requests go through node:http, with the same checks as on the
+JVM. The library looks up the host's name before it calls the
+`:allow-pred`, so that `url/public?` checks every address of the name.
+It then connects only to those addresses. It also follows redirects
+itself and calls the `:allow-pred` on each.
 
 ### Browsers
 
-In a browser, requests go through fetch, and two of the guards are
+In a browser, requests go through fetch, and two of the checks are
 weaker:
 
-- A page can't look up a name, so `url/public?` checks the name itself,
-  and refuses e.g. localhost and names under .local.
-- Fetch follows redirects itself, so the `:allow-pred` doesn't see them.
+- A page can't look up a name, so `url/public?` checks only the name
+  itself and refuses e.g. localhost and names under .local.
+- Fetch follows redirects itself, so the `:allow-pred` never gets their
+  URLs.
 
-Those guards matter less in a page, since its requests come from the
+Those checks matter less in a page, since its requests come from the
 user's own device rather than from your server. CORS also hides the
-headers that a server doesn't expose, and the response is then marked
+headers that a server doesn't expose, and the response then has
 `:filtered?`.
 
 ### Capacitor
 
 In a Capacitor app, CORS applies to the web view too, so send through the
-native HTTP of the CapacitorHttp plugin instead. It has the guards of
-Node, except the lookup of names:
+native HTTP of the CapacitorHttp plugin instead. It makes the same
+checks as in Node, except that it doesn't look up names:
 
 ```clojure
 (require '["@capacitor/core" :refer [CapacitorHttp]]
@@ -349,11 +351,11 @@ episodes, to a plugin for file transfers.
 ### Electron
 
 In an Electron app, the page sends its requests through the main process,
-where Node sends them with all its guards. Give the main process
+where Node sends them with all its checks. Give the main process
 `electron/handler` and the page `electron/sender`, as the docstring of
-the `electron` namespace shows. The handler keeps its own limits,
-whatever a page asks for, so a page can't reach the network of the
-computer.
+the `electron` namespace shows. The handler applies its own limits
+whatever a page asks for, so a page can't reach the computer's own
+network.
 
 Principles
 ----------
@@ -362,11 +364,11 @@ Principles
   specs it implements, and cites their sections.
 - **Plain data.** Requests and responses are maps, so you can send a
   request with any HTTP client, or with a function of your own.
-- **One codebase.** Apart from the client of each platform, the library
-  is written in `.cljc`, and it behaves the same everywhere, as far as
-  JavaScript allows. It reads each URL and its host with whatwg-url, so a
-  host that a browser would read as an IP address, e.g. 0x7f.1, is checked
-  as one.
+- **One codebase.** Apart from each platform's client, the library is
+  written in `.cljc` and behaves the same everywhere, as far as
+  JavaScript allows. It parses each URL and its host with whatwg-url, so
+  it checks a host that a browser would parse as an IP address (e.g.
+  0x7f.1) as one.
 
 Development
 -----------
@@ -379,9 +381,8 @@ clojure -M:cljs compile browser-test  # the tests in a browser
 node test/browser-run.mjs             # run them in a headless Chrome
 ```
 
-Every namespace is public, except the client of each platform, the
-rules that the clients share and a few helpers, which are marked
-`^:no-doc`.
+Every namespace is public except those marked `^:no-doc`: each
+platform's client, the rules that the clients share and a few helpers.
 
 License
 -------

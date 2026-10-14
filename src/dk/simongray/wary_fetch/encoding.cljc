@@ -1,9 +1,8 @@
 (ns ^:no-doc dk.simongray.wary-fetch.encoding
   "The encoding of a body in bytes, from its byte order mark, the charset
-  of its Content-Type, or what the document says of itself: the meta tag
-  of an HTML page, by the HTML Standard, section 13.2.3.2, or the
-  declaration of an XML document, by XML 1.0, appendix F, and RFC 7303,
-  section 3.2."
+  of its Content-Type or what the document declares: an HTML page's meta
+  tag (HTML Standard, section 13.2.3.2) or an XML document's declaration
+  (XML 1.0, appendix F, and RFC 7303, section 3.2)."
   (:require [clojure.string :as str]
             [dk.simongray.whatwg-mime :as mime]))
 
@@ -29,7 +28,7 @@
 
 (defn- attributes
   "The attributes in the text `s` of a start tag after its name, by their
-  names in lower case, the first of a name winning."
+  names in lower case. When a name repeats, the first one wins."
   [s]
   (reduce (fn [found [_ k double single bare]]
             (let [k (str/lower-case k)]
@@ -49,10 +48,10 @@
 ;; for a > in the value of an attribute before the meta tag; and the
 ;; algorithm for extracting a character encoding from a meta element
 (defn- meta-encoding
-  "The encoding that the first meta tag with one names, in the first 1024
-  bytes of the HTML page in the bytes `b`, outside a comment, or nil.
+  "The encoding that the first meta tag with one names in the first 1024
+  bytes of the HTML page in the bytes `b`, outside comments, or nil.
   UTF-16 counts as UTF-8, since the page was read as ASCII, and
-  x-user-defined as windows-1252."
+  x-user-defined counts as windows-1252."
   [b]
   (let [page    (str/replace (head b 1024) #"<!--[\s\S]*?(?:-->|$)" "")
         pragma? #(= "content-type" (str/lower-case (str/trim (str %))))
@@ -74,12 +73,12 @@
 
   - the byte order mark
   - the charset of the Content-Type
-  - a meta tag in the first 1024 bytes of an HTML page, or the
-    declaration of any other document, which XML has
+  - a meta tag in the first 1024 bytes of an HTML page, or the XML
+    declaration of any other document
 
-  Each label names an encoding as a browser reads it, e.g. latin1 names
-  windows-1252, and a label of no encoding doesn't count. The byte order
-  mark is dropped."
+  Each label names an encoding as in a browser, e.g. latin1 names
+  windows-1252. A label of no encoding doesn't count. The text leaves out
+  the byte order mark."
   [b headers]
   (let [content-type (mime/extract (get headers "content-type"))]
     ;; the byte order mark comes first, as mime/decode reads it

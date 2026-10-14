@@ -3,7 +3,7 @@
   through the main process, where Node sends it and CORS doesn't stop it.
 
   The main process answers with handler, and the page sends with sender
-  over the IPC of Electron, which the preload script gives the page:
+  over Electron's IPC, which the preload script exposes to the page:
 
       ;; main process
       (.handle ipcMain \"wary-fetch\" (electron/handler))
@@ -15,10 +15,10 @@
       ;; page
       (def send (electron/sender (.. js/window -waryFetch -send)))
 
-  The main process keeps its own limits, so a page can't reach what the
+  The main process applies its own limits, so a page can't reach what the
   handler doesn't allow, e.g. the app's own network. A request and its
-  response cross the IPC as plain data, without functions, so a :sink or an
-  :allow-pred of the page stays in the page."
+  response cross the IPC as plain data without functions, so a page's
+  :sink or :allow-pred stays in the page."
   (:require [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.json :as json]
@@ -32,8 +32,8 @@
    :truncate? :max-redirects :query-params :user-agent])
 
 (def ^:no-doc response-keys
-  "The keys of a response that cross back to the page, the :headers and
-  the :redirects as data."
+  "The keys of a response that cross back to the page, with the :headers
+  and the :redirects as data."
   [:status :url :headers :body :content-range :permanent-url :redirects
    :truncated?])
 
@@ -74,11 +74,11 @@
                      :url     url}}))
 
 (defn handler
-  "A function to give ipcMain.handle in the main process, which sends each
-  request of a page with the :send of `opts`, within the limits of `opts`,
-  and gives a promise of the response as plain data.
+  "A function to pass to ipcMain.handle in the main process, which sends
+  each request of a page with the :send and within the limits of `opts`,
+  and returns a promise of the response as plain data.
 
-  The `opts` are those of the requests that the main process allows:
+  The `opts` set what the main process allows:
 
   - :send, the function that sends, http/send! by default
   - :allow-pred, the URLs that a page may reach, url/public? by default,
@@ -108,8 +108,8 @@
                            (plain value response-keys)))))))))
 
 (defn- response-of
-  "The response of the plain data `o` from the main process, or a throw of
-  the exception that it names, with its :type and :url."
+  "The response in the plain data `o` from the main process. When `o`
+  names an exception instead, this throws it with its :type and :url."
   [^js o]
   (if-let [^js e (.-error o)]
     (throw (ex-info (.-message e)
@@ -119,16 +119,17 @@
     (read-plain o response-keys #{})))
 
 (defn sender
-  "A function to give as :send in the page, which sends each request
-  through the main process with `invoke`, a function that gives the plain
-  data of a request to the handler of the main process and gives a promise
-  of its answer, e.g. ipcRenderer.invoke with the name of the channel.
+  "A function to pass as :send in the page, which sends each request
+  through the main process with `invoke`.
 
-  The keys of a request are those of send!, but for :sink, :allow-pred
-  and :signal, which the main process doesn't get. The :signal is checked
-  before the request crosses. Its hidden texts go as text, as they go to a
-  server. The main process follows the redirects, so the :prepare-fn of
-  the request gives the request of the first hop alone, in the page."
+  The `invoke` function passes the plain data of a request to the main
+  process's handler and returns a promise of its answer, e.g.
+  ipcRenderer.invoke with the name of the channel. The keys of a request
+  are those of send!, except :sink, :allow-pred and :signal, which the
+  main process doesn't get. The sender checks the :signal before the
+  request crosses. Hidden headers and bodies cross as text, as they go to
+  a server. The main process follows the redirects, so the :prepare-fn of
+  the request runs in the page, on the first hop alone."
   [invoke]
   (fn [{:keys [url as signal prepare-fn] :as request}]
     (if (limits/stopped? signal)

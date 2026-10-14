@@ -3,9 +3,9 @@
   servers don't let a page of another site read their answers.
 
   The proxy fetches any public URL for whoever can reach it, so put it
-  behind your login. Its answers come from other sites but have the
-  origin of yours, so it refuses to be opened as a page, and no answer
-  runs scripts when a browser opens it anyway."
+  behind your login. Its answers come from other sites but have your
+  site's origin, so it refuses to be opened as a page. When a browser
+  opens an answer anyway, it runs no scripts in it."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
@@ -22,9 +22,10 @@
                     ScheduledFuture ScheduledThreadPoolExecutor TimeUnit])))
 
 (def defaults
-  "The options of the proxy, which its own options replace one by one:
+  "The default options of the proxy, which the options you give replace
+  one by one:
 
-  - :allow-pred, the URLs that it fetches, those on the public internet
+  - :allow-pred, a predicate of the URLs that it fetches, url/public?
   - :send, the function that sends a request, http/send!
   - :forward, the request headers that go on to the other site
   - :expose, the response headers that come back to the page
@@ -32,9 +33,9 @@
   - :max-bytes, the most that a body can hold, 32 MB, since the proxy
     holds each body in memory
 
-  Each request also has the :timeout-seconds of the options, if any. The
-  page's own cookies and credentials never go on, unless :forward names
-  them."
+  A :timeout-seconds in the options goes on each request too. The proxy
+  never passes on the page's own cookies and credentials unless :forward
+  names them."
   {:allow-pred url/public?
    :send       http/send!
    :forward    #{"accept" "if-modified-since" "if-none-match" "range"}
@@ -44,37 +45,37 @@
    :max-bytes  (* 32 1024 1024)})
 
 (def ^:no-doc via
-  "The Via of each request that the proxy sends, as RFC 9110, section
-  7.6.3, has it, so that it can tell a request of its own and refuse to
-  fetch itself."
+  "The Via header of each request that the proxy sends (RFC 9110, section
+  7.6.3), so that it can refuse a request that it sent itself."
   "1.1 wary-fetch")
 
 (def ^:no-doc permanent-header
   "The response header that names the URL that redirects moved the
   request to for good, since HTTP has no header for it. The name has no
-  X-, as RFC 6648 asks, and is one of this library's own."
+  X- prefix, as RFC 6648 asks, and is the library's own."
   "Wary-Fetch-Permanent-Location")
 
 (def ^:no-doc location-header
   "The response header that names the Location of a redirect that the
   client didn't follow. A browser would follow a Location itself, to a
-  site that its page can't read, so it goes under a name of its own."
+  site that its page can't read, so the proxy sends it under a name of
+  its own."
   "Wary-Fetch-Location")
 
 ;; RFC 9209, section 2.3
 (def ^:no-doc errors
-  "The error of the Proxy-Status of RFC 9209, and the status of the
-  answer, for each type of exception of a request that the proxy answers
-  with. Any other failure is ::failed."
+  "The Proxy-Status error (RFC 9209) and the status that the proxy answers
+  with, for each type of exception of a request. Any other failure is
+  ::failed."
   {::http/refused   ["http_request_denied" 403]
    ::http/timeout   ["http_response_timeout" 504]
    ::http/too-large ["http_response_body_size" 502]
    ::failed         ["destination_unavailable" 503]})
 
 (def ^:no-doc safety
-  "The headers of every answer of the proxy, which comes from another site
-  but has the origin of yours: a browser that opens it runs no scripts,
-  guesses no other type, and lets no other site embed it."
+  "The headers of every answer from the proxy, which comes from another
+  site but has your site's origin. A browser that opens one runs no
+  scripts, sniffs no other type and lets no other site embed it."
   {"Content-Security-Policy"      "default-src 'none'; sandbox"
    "X-Content-Type-Options"       "nosniff"
    "Cross-Origin-Resource-Policy" "same-origin"})
@@ -87,14 +88,14 @@
 
 (defn- header-names
   "The headers of the `ring-request` by their names in lower case, since
-  not every adapter gives them so."
+  not every adapter lower-cases them."
   [ring-request]
   (update-keys (:headers ring-request) str/lower-case))
 
 ;; RFC 9209, section 2, with the details as a string of RFC 8941, section 3.3.3
 (defn- answer
-  "The answer of the proxy with `status` when it doesn't send the request:
-  the `error` of RFC 9209, and the `details` as text."
+  "The proxy's answer with `status` when it doesn't send the request, with
+  the RFC 9209 `error` and the `details` as text."
   [status error details]
   (let [quoted       (-> details
                          (str/replace #"[\\\"]" #(str "\\" %))
@@ -113,9 +114,9 @@
   sends it on. The proxy refuses:
 
   - a method other than GET and HEAD
-  - a request that it sent itself, as its Via tells
-  - a page that opens it as a document, or a page of another site, as the
-    Sec-Fetch-Mode and Sec-Fetch-Site of the browser tell
+  - a request that it sent itself, by its Via header
+  - a page that opens it as a document, or a page of another site, by the
+    browser's Sec-Fetch-Mode and Sec-Fetch-Site headers
   - a request without an http or https URL as its url parameter"
   [{:keys [request-method] :as ring-request}]
   (let [headers (header-names ring-request)]
@@ -148,10 +149,10 @@
   "The request that the proxy sends for `ring-request`, with `opts` over
   defaults, or nil when the url parameter names no http or https URL.
 
-  The request has the headers of the :forward of `opts`, the Via of the
-  proxy, and the range of the Range header, so that no more is read than
-  it asks for. Its body is bytes when the as parameter is bytes, and else
-  text."
+  The request has the headers that the :forward of `opts` names, the
+  proxy's Via, and the range of a Range header with a single range, so
+  that the proxy reads no more than the page asked for. Its body is bytes
+  when the as parameter is bytes, and text otherwise."
   ([ring-request]
    (upstream-request ring-request {}))
   ([{:keys [request-method] :as ring-request} opts]
@@ -180,13 +181,14 @@
       (mime/javascript? m)))
 
 (defn ring-response
-  "The Ring response that gives the page the `response` of its request,
-  with the headers of the :expose of `opts`, or else of defaults.
+  "The Ring response that passes the `response` of a page's request back to
+  the page, with the headers that the :expose of `opts` (or of defaults)
+  names.
 
-  A text body goes as UTF-8, since a page reads the answers of fetch in
-  it, and a type of text says so. Any other type stays as it came, so ask
-  for bytes for a body that isn't text. The URL that answered, after
-  redirects, is the Content-Location (RFC 9110, section 8.7). The URL that
+  A text body goes as UTF-8, which is how fetch in a page decodes it, and
+  a text type gets that charset. Any other type stays as it came, so ask
+  for bytes for a body that isn't text. The URL that answered after
+  redirects is the Content-Location (RFC 9110, section 8.7). The URL that
   permanent redirects led to is the Wary-Fetch-Permanent-Location.
 
   A redirect that the client didn't follow, e.g. from https to http, keeps
@@ -219,8 +221,8 @@
       :body    (if (string? body) (bytes/encode body) body)})))
 
 (defn error-response
-  "The Ring response for `e`, the exception of the :send of the proxy, with
-  the Proxy-Status of RFC 9209, from which the page makes the same
+  "The Ring response for the exception `e` that the proxy's :send threw,
+  with an RFC 9209 Proxy-Status from which the page makes the same
   exception again."
   [e]
   (let [type           (:type (ex-data e))
@@ -233,7 +235,7 @@
 
 #?(:clj
    (defn handler
-     "A Ring handler that sends each GET and HEAD request on to the URL of
+     "A Ring handler that sends each GET and HEAD request on to the URL in
      its url parameter, with `opts` over defaults, and answers with what
      came back.
 
@@ -253,14 +255,16 @@
                   (error-response e)))))))))
 
 (def stream-defaults
-  "The options of the streaming proxy, which its own options replace one by
-  one: those of defaults, but for these, since it holds no body in memory:
+  "The default options of the streaming proxy, which the options you give
+  replace one by one. They're those of defaults except for these, since it
+  holds no body in memory:
 
   - :max-bytes, the most that one answer passes on, 2 GB
-  - :stream-seconds, how long one answer takes at most to pass on, an hour
+  - :stream-seconds, the longest that one answer may take to pass on, an
+    hour
   - :expose, also the Accept-Ranges and the Content-Length
 
-  The :send of defaults doesn't count, since the JDK sends each request."
+  They have no :send, since the JDK's client sends each request."
   (-> defaults
       (dissoc :send)
       (assoc :max-bytes      (* 2 1024 1024 1024)
@@ -302,12 +306,12 @@
 
 #?(:clj
    (defn- stream-response
-     "The Ring response that passes on the `response` of the JDK to the
-     prepared `request` after the redirects `chain`, its body as it arrives,
-     with the headers of the :expose of `opts`.
+     "The Ring response that passes on the JDK's `response` to the prepared
+     `request` after the redirects `chain`, with its body as it arrives and
+     the headers that the :expose of `opts` names.
 
-     An answer whose Content-Length is over the :max-bytes of `opts` is
-     refused, before any of its body passes on."
+     It refuses an answer whose Content-Length is over the :max-bytes of
+     `opts` before any of its body passes on."
      [^HttpResponse response chain {:keys [method] :as request}
       {:keys [expose max-bytes stream-seconds] :as opts}]
      (let [status   (.statusCode response)
@@ -344,14 +348,14 @@
 ;; answer of 206 comes back with its Content-Range
 #?(:clj
    (defn stream-handler
-     "A Ring handler that sends each GET and HEAD request on to the URL of
+     "A Ring handler that sends each GET and HEAD request on to the URL in
      its url parameter, as handler does, with `opts` over stream-defaults,
      but passes on the body as it arrives rather than holding it, e.g. for
      an episode that a page saves.
 
-     The body goes on as it came, without gzip undone or text decoded, and
-     a Range goes on, so that a page can resume a download. A redirect is
-     followed by the proxy, which asks :allow-pred about each URL."
+     The body goes on as it came, without gzip undone or text decoded. A
+     Range goes on too, so that a page can resume a download. The proxy
+     follows redirects itself and checks each URL with :allow-pred."
      ([]
       (stream-handler {}))
      ([opts]
@@ -374,9 +378,9 @@
                   (error-response e)))))))))
 
 (defn proxied
-  "The `request` sent through the proxy at `base`: to `base`, with the URL
-  of the request as the url parameter, and without its :allow-pred, which the
-  proxy applies itself."
+  "The `request` to send through the proxy at `base`: to `base` with the
+  request's URL as the url parameter, and without its :allow-pred, which
+  the proxy applies itself."
   [base {:keys [url as] :as request}]
   (let [as-param (when (= :bytes as) "bytes")]
     (-> request
@@ -384,9 +388,9 @@
         (assoc :url (url/with-query base {:url url :as as-param})))))
 
 (defn- failure
-  "The exception for `request`, which the proxy failed to send, as the
-  `proxy-status` of its answer tells. Nil when it tells of no failure of
-  this proxy."
+  "The exception for the `request` that the proxy failed to send, by the
+  `proxy-status` of its answer, or nil when that names no failure of this
+  proxy."
   [request proxy-status]
   (when-let [[_ error] (re-find #"wary-fetch; error=([a-z_]+)" proxy-status)]
     (let [quoted  #"details=\"((?:[^\"\\]|\\.)*)\""
@@ -401,11 +405,11 @@
       (ex-info message {:type kind :url (:url request)}))))
 
 (defn unproxied
-  "The `response` of the proxy to `request`, as a direct request would
-  give it.
+  "The proxy's `response` to `request`, as a direct request would return
+  it.
 
-  The response has the :url that answered, after redirects, the
-  :permanent-url that permanent redirects led to, and the Location of a
+  The response has the :url that answered after redirects, the
+  :permanent-url that permanent redirects led to and the Location of a
   redirect that wasn't followed. When the proxy failed to send the
   request, this throws the exception that a direct request would have
   thrown, with the same :type."
@@ -422,13 +426,13 @@
         location (assoc-in [:headers "location"] [location])))))
 
 (defn sender
-  "A function to give as :send, which sends each request through the
-  proxy at `base`, with `opts`, and gives what a direct request would.
+  "A function to pass as :send, which sends each request through the proxy
+  at `base` with the `opts` and returns what a direct request would.
 
-  The `base` is the URL of the route of the proxy, e.g. /proxy in a page.
-  Each request goes with the :send of `opts`, http/send! by default. A
-  request whose URL isn't http or https, e.g. a WebSocket that a page opens
-  by itself, goes to that :send as it is."
+  The `base` is the URL of the proxy's route, e.g. /proxy in a page. Each
+  request goes with the :send of `opts`, http/send! by default. A request
+  whose URL isn't http or https (e.g. a WebSocket that a page opens by
+  itself) goes to that :send as it is."
   ([base]
    (sender base {}))
   ([base {:keys [send] :or {send http/send!} :as opts}]

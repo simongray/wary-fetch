@@ -1,7 +1,7 @@
 (ns ^:no-doc dk.simongray.wary-fetch.redirect
-  "Redirects, by RFC 9110, section 15.4: which ones a client follows,
-  where each leads, the request that follows it, and where a chain of them
-  moved a request to for good."
+  "Redirects by RFC 9110, section 15.4: which ones a client follows, where
+  each leads and the request that follows it, and the URL that a chain of
+  them moved a request to for good."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.url :as url]))
 
@@ -10,8 +10,8 @@
   #{301 302 303 307 308})
 
 (def limit
-  "How many redirects a client follows at most, unless the :max-redirects
-  of a request says otherwise."
+  "How many redirects a client follows at most, unless a request's
+  :max-redirects says otherwise."
   5)
 
 (def credential-headers
@@ -19,10 +19,9 @@
   #{"authorization" "cookie" "proxy-authorization"})
 
 (defn target
-  "Where a redirect of the request to `url` with the Location `location`
-  leads, or nil when it names no http or https URL with a host. It's nil
-  too when it leaves https for http, which the client of the JDK refuses
-  as well."
+  "Where a redirect from `url` with the Location `location` leads, or nil
+  when it names no http or https URL with a host. It's also nil when the
+  redirect leaves https for http, which the JDK's client refuses too."
   [url location]
   (when-let [to (some->> location (url/absolute-url url))]
     (when (and (url/web-url? to)
@@ -34,9 +33,9 @@
   "The request that follows `request` after a redirect of `status` to the
   URL `target`.
 
-  A 303, or a 301 or 302 to a POST, turns into a GET without a body, as
-  browsers and the JDK do. A HEAD stays a HEAD. Credentials stay behind
-  when the redirect leaves the origin."
+  After a 303, or a 301 or 302 to a POST, the request becomes a GET
+  without a body, as in browsers and the JDK. A HEAD stays a HEAD.
+  Credentials stay behind when the redirect leaves the origin."
   [{:keys [method url headers body] :as request} status target]
   (let [get?        (or (= 303 status)
                         (and (#{301 302} status) (= :post method)))
@@ -51,11 +50,11 @@
            :body    (when-not get? body))))
 
 (defn hop
-  "The request of a hop, the first or one after a redirect, as the
-  :prepare-fn of the `request` returns it (e.g. signed for its URL), or the
-  request itself without one. On the JVM it's the request, after the
-  future that the function returns when it does, and in ClojureScript a
-  promise of it. The request keeps the function for the next hop."
+  "The request of a hop (the first or one after a redirect) as the
+  :prepare-fn of the `request` returns it, e.g. signed for its URL, or the
+  request itself when it has none (in ClojureScript a promise of it). On
+  the JVM, it derefs a future that the function returns. The request
+  keeps the function for the next hop."
   [{:keys [prepare-fn] :as request}]
   (let [keep-fn #(assoc % :prepare-fn prepare-fn)]
     #?(:clj  (if prepare-fn
@@ -70,8 +69,8 @@
   "The URL that the first request moved to for good, by the redirects in
   `chain` before `final-url`, or nil when the first isn't permanent.
 
-  A redirect is permanent when it's a 301 or a 308, and the URL is the one
-  that the permanent redirects at the start of the chain lead to."
+  A redirect is permanent when it's a 301 or a 308. The URL is where the
+  permanent redirects at the start of the chain lead."
   [chain final-url]
   (let [n (count (take-while #(#{301 308} (first %)) chain))]
     (when (pos? n)

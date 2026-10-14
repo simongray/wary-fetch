@@ -1,10 +1,10 @@
 (ns dk.simongray.wary-fetch.json
   "JSON on both platforms, without a library: a strict reader by RFC 8259
-  on the JVM, and the JSON of JavaScript in ClojureScript.
+  on the JVM, and JavaScript's JSON in ClojureScript.
 
-  An object reads as a map with keyword keys, unless a :key-fn says
-  otherwise, an array as a vector, and a number as a long when it's an
-  integer that fits, or else as a double. On the JVM, a longer integer
+  An object reads as a map with keyword keys (unless a :key-fn says
+  otherwise) and an array as a vector. A number reads as a long when it's
+  an integer that fits, and else as a double. On the JVM, a longer integer
   reads as a bigint, and read-json returns nil for a text with an integer
   of more than max-digits digits. In JavaScript every number is a double,
   so an integer past 2^53 loses its last digits there."
@@ -134,9 +134,9 @@
 #?(:clj
    (defn- read-items
      "The elements of the array or the members of the object that opens at
-     `i` in `s`, up to `close`, the closing character, by `item`, a function
-     of the index that gives what an item adds and the index after it, as a
-     pair of the items and the index after `close`."
+     `i` in `s` and ends with the character `close`, as a pair of the items
+     and the index after `close`. The `item` function takes an index and
+     returns a pair of an item and the index after it."
      [^String s ^long i close item]
      (let [start (skip-space s (inc i))]
        (if (and (< start (.length s)) (= close (.charAt s start)))
@@ -180,9 +180,9 @@
 
 #?(:cljs
    (defn- from-js
-     "The value that JSON.parse gave, `x`, which nests at `depth`, as
-     Clojure data, with object keys by `key-fn`. It throws when it nests
-     deeper than max-depth, as the reader of the JVM does."
+     "The value `x` from JSON.parse, which nests at `depth`, as Clojure data
+     with object keys by `key-fn`. It throws when `x` nests deeper than
+     max-depth, as the JVM's reader does."
      [x depth key-fn]
      (let [nested? (or (array? x)
                        (and (some? x) (= "object" (goog/typeOf x))))]
@@ -207,7 +207,7 @@
   more than max-digits digits.
 
   The `opts` are :key-fn, a function of the name of each member of an
-  object that gives its key, keyword by default."
+  object that returns its key, keyword by default."
   ([s]
    (read-json s {}))
   ([s {:keys [key-fn] :or {key-fn keyword} :as opts}]
@@ -244,11 +244,11 @@
 
 #?(:clj
    (def ^:no-doc instant-format
-     "The form of an instant in UTC that JavaScript's JSON gives it."
+     "The format of an instant in UTC, as JavaScript's JSON writes it."
      (DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")))
 
 (defn- key-name
-  "The name of the member of an object that the key `k` gives."
+  "The name of an object's member for the map key `k`."
   [k]
   (if (keyword? k) (subs (str k) 1) (str k)))
 
@@ -300,10 +300,12 @@
        (write-string! sb (str x)))))
 
 (defn write-json
-  "The JSON text of the value `x`: a map as an object, with keywords as
-  their names, namespace and all, a vector, a list or a set as an array,
-  an instant as its date and time in UTC, and a number that isn't finite
-  as null, as JavaScript writes it."
+  "The JSON text of the value `x`, as JavaScript writes it:
+
+  - a map as an object, and a vector, a list or a set as an array
+  - a keyword as its name, namespace and all
+  - an instant as its date and time in UTC
+  - a number that isn't finite as null"
   [x]
   #?(:clj  (str (write! (StringBuilder.) x))
      :cljs (js/JSON.stringify (clj->js x :keyword-fn key-name))))

@@ -1,14 +1,14 @@
 (ns dk.simongray.wary-fetch.url
-  "URLs, and the hosts that they name, the same way on both platforms.
+  "URLs and the hosts that they name, the same way on both platforms.
 
-  This covers percent-encoding and query strings, a URL made absolute
-  against the document that it's in, as a browser does it, and the scheme
-  and the origin of a URL. It also tells whether the host of a URL is on
-  the public internet, which is what a request that a stranger chose must
-  check.
+  This covers percent-encoding and query strings, resolving a URL against
+  the document that it's in (as a browser does it), and the scheme and
+  the origin of a URL. It also checks whether a URL's host is on the
+  public internet, e.g. before you fetch a URL that a stranger gave you.
 
-  URLs are parsed by whatwg-url, which implements the URL Standard, so a
-  host is read as a browser reads it, e.g. 0x7f.1 as 127.0.0.1."
+  The library parses URLs with whatwg-url, which implements the URL
+  Standard, so it parses a host as a browser does, e.g. 0x7f.1 as
+  127.0.0.1."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.secret :as secret]
             [dk.simongray.whatwg-url :as whatwg-url]
@@ -19,21 +19,22 @@
 
 (defn percent-encode
   "The string `s` percent-encoded for a query string, the same way on both
-  platforms. Spaces become %20, not +, and letters, digits and the marks
-  - _ . ! ~ * ' ( ) stay as they are."
+  platforms. Spaces become %20, not +. Letters, digits and the marks
+  -_.!~*'() stay as they are."
   [s]
   (percent/encode (str s)))
 
 (defn percent-decode
   "The string `s` with its percent-encoding undone. A plus sign stays a
-  plus sign, a % that starts no escape stays as it is, and bytes that
-  aren't UTF-8 become U+FFFD, rather than throwing."
+  plus sign and a % that starts no escape stays as it is. Bytes that
+  aren't UTF-8 become U+FFFD rather than throwing."
   [s]
   (percent/decode (str s)))
 
 (defn query-string
-  "The query string for `params`, with keys and values URL-encoded and nil
-  values left out. A true value becomes the bare flag that some APIs take."
+  "The query string for `params`, with keys and values percent-encoded and
+  nil values left out. A true value becomes the bare flag that some APIs
+  take."
   [params]
   (str/join "&" (for [[k v] params
                       :when (some? v)]
@@ -43,11 +44,11 @@
 
 (defn query-pairs
   "The parameters of the query string `s`, decoded, as pairs of a name and
-  a value in their order, a name that comes twice twice. A plus sign is a
-  space, as in the body of a form, and a name without = has a nil value.
+  a value in their order, repeats included. A plus sign is a space, as in
+  the body of a form. A name without = has a nil value.
 
-  Use this rather than query-params where a repeated parameter must be
-  refused, as RFC 6749, section 3.1, has an OAuth server do."
+  Use this rather than query-params when you have to refuse a repeated
+  parameter, as an OAuth server does by RFC 6749, section 3.1."
   [s]
   (let [decode #(percent-decode (str/replace (str %) "+" " "))]
     (vec (for [part  (str/split (str s) #"&")
@@ -58,8 +59,8 @@
 
 (defn query-params
   "The parameters of the query string `s`, decoded, by name. A plus sign
-  is a space, as in the body of a form. Of a name that comes twice, the
-  last value counts."
+  is a space, as in the body of a form. When a name repeats, its last
+  value counts."
   [s]
   (into {} (query-pairs s)))
 
@@ -80,10 +81,10 @@
 
 (defn without-trailing-slashes
   "The `url` without the slashes at its end, e.g. the root of an API that
-  paths are joined to, in a time that grows with its length alone."
+  paths are joined to, in time linear in its length."
   [url]
-  ;; a match may start only where a run of slashes starts: /+$ alone is
-  ;; tried again from every slash of a long run, quadratically
+  ;; a match may start only where a run of slashes starts, since the regex
+  ;; engine would try /+$ alone again from every slash of a long run
   (str/replace (str url) #"(^|[^/])/+$" "$1"))
 
 (defn split-credentials
@@ -92,10 +93,10 @@
   nil when the URL holds none.
 
   A URL such as https://user:pass@host/feed.xml holds them. Use this when
-  you keep a URL, to keep the password apart from the address, since an
-  address travels into files, logs and messages.
+  you store a URL, to keep the password apart from the address, since
+  addresses end up in files, logs and messages.
 
-  The password is a hidden text, which the printer doesn't show."
+  The password is hidden with secret/hide, so it prints as #<secret>."
   [url]
   (let [[_ scheme authority tail]
         (re-matches #"(?s)([a-zA-Z][a-zA-Z0-9+.-]*://)([^/?#]*)(.*)"
@@ -121,8 +122,8 @@
 #?(:clj
    (defn- encode-illegal
      "The part `s` of a URL with each character that a URI may not contain
-     percent-encoded as UTF-8, and the characters of the set `also` too. A
-     percent sign that starts no escape is encoded as well."
+     percent-encoded as UTF-8, and the characters in the set `also` too.
+     It also encodes a percent sign that starts no escape."
      [^String s also]
      (let [sb     (StringBuilder.)
            bytes  (.getBytes s StandardCharsets/UTF_8)
@@ -151,15 +152,15 @@
        (str sb))))
 
 (defn legal-url
-  "The `url` as the URL Standard writes it, which is what the client of
-  each platform gets, so that it reads the host that public? checked. On
-  the JVM each character that java.net.URI can't take is percent-encoded
-  as UTF-8 too, e.g. a bracket in the path, or a percent sign that starts
-  no escape.
+  "The `url` as the URL Standard serializes it, which is what each
+  platform's client gets, so that it parses the host that public? checked.
+  On the JVM, it also percent-encodes as UTF-8 each character that
+  java.net.URI can't take, e.g. a bracket in the path or a percent sign
+  that starts no escape.
 
-  A URL that's written so already comes back unchanged. A host with
-  letters outside ASCII gets the ASCII form of IDNA. Text that isn't a
-  URL stays as it is, but for the encoding on the JVM."
+  A URL that's already in this form comes back unchanged. A host with
+  letters outside ASCII gets its IDNA ASCII form. Text that isn't a URL
+  stays as it is, except for the encoding on the JVM."
   [^String url]
   (let [url (or (whatwg-url/href url) url)]
     #?(:clj  (let [[_ head path tail]
@@ -172,7 +173,7 @@
 
 (defn absolute-url
   "The `url` made absolute against `base`, the URL of the document that
-  it's in, as a browser does it. Nil when one of them doesn't read as a
+  it's in, as a browser does it, or nil when either doesn't parse as a
   URL.
 
   A path, a path from the root, a query alone or a URL without a scheme
@@ -187,9 +188,9 @@
 
 ;; URL Standard, section 4.4, the basic URL parser
 (defn scheme
-  "The scheme of the URL `s` in lower case, or nil for a relative URL. It's
-  read as a browser reads it: without the tabs and line breaks in it, and
-  without the spaces and control characters in front."
+  "The scheme of the URL `s` in lower case, or nil for a relative URL. It
+  parses the scheme as a browser does, ignoring the tabs and line breaks
+  in `s` and the spaces and control characters in front."
   [s]
   (let [s (-> (str s)
               (str/replace #"[\t\n\r]" "")
@@ -205,12 +206,14 @@
 
 ;; RFC 3986, section 3.2
 (defn parts
-  "The parts of the URL `s` as it's written, before a parser tidies them,
-  as a map of :scheme, :authority, :userinfo, :host, :port, :path, :query
-  and :fragment, each nil when the URL has none, or nil when `s` has no
-  scheme. The scheme is in lower case, and the rest is as written, e.g. a
-  port of 443 for https, or a .. segment in the path, percent-encoded or
-  not, for a check of the URL rather than a request."
+  "The parts of the URL `s` as it's written, before a parser normalizes
+  them, or nil when `s` has no scheme.
+
+  The parts are a map of :scheme, :authority, :userinfo, :host, :port,
+  :path, :query and :fragment, each nil when the URL has none. The scheme
+  is in lower case and the rest is as written, e.g. a port of 443 for
+  https or a .. segment in the path, percent-encoded or not. Use this to
+  check a URL, not to send a request."
   [s]
   (when-let [[_ scheme authority path query fragment]
              (re-matches parts-pattern (str s))]
@@ -232,12 +235,12 @@
 
 (defn origin
   "The scheme, host and port of the http or https URL `url` as a vector,
-  as the URL standard and browsers read them. Nil for another URL, and for
-  a URL without a host.
+  as the URL Standard and browsers parse them, or nil for any other URL
+  and for a URL without a host.
 
   The host is in lower case, and a name with letters outside ASCII is in
-  the ASCII form of IDNA. When the URL names no port, the port is the one
-  of the scheme."
+  its IDNA ASCII form. When the URL names no port, the port is the
+  scheme's default."
   [url]
   (when-let [{:keys [scheme host port]} (some-> url str whatwg-url/parse)]
     (when (and (contains? default-ports scheme) (seq host))
@@ -332,9 +335,8 @@
 
 #?(:clj
    (defn- public-address?
-     "Whether the IP address `a` is on the public internet, both by the
-     kinds of address of the JDK and by the IANA registries of special
-     addresses."
+     "Whether the IP address `a` is on the public internet, by both the
+     JDK's kinds of address and the IANA registries of special addresses."
      [^InetAddress a]
      (let [b (mapv #(bit-and % 0xff) (.getAddress a))]
        (and (not (or (.isAnyLocalAddress a)
@@ -345,8 +347,8 @@
             (public-ip? b)))))
 
 (defn ^:no-doc ipv4
-  "The four numbers of the IPv4 address that the text `s` writes, or nil
-  for anything else."
+  "The four numbers of the IPv4 address in the text `s`, or nil for
+  anything else."
   [s]
   (when (re-matches #"\d{1,3}(?:\.\d{1,3}){3}" s)
     (let [ns (mapv parse-long (str/split s #"\."))]
@@ -354,8 +356,8 @@
         ns))))
 
 (defn ip-address
-  "The bytes of the IP address that the text `s` writes, as numbers, or
-  nil for anything else, e.g. a name or a hash.
+  "The bytes of the IP address in the text `s`, as numbers, or nil for
+  anything else, e.g. a name or a hash.
 
   An IPv4 address has four, and an IPv6 address sixteen. The text of an
   IPv6 address can have the brackets that a URL puts around it."
@@ -376,7 +378,7 @@
   Such a name has a dot in it, not counting a dot at its end. It also
   doesn't stay on a local network, as localhost, .local, .internal and
   .home.arpa do. A host whose last part is a number isn't a name but an
-  IPv4 address, as a browser reads it, e.g. 10.0.0.1 or 0x7f.0.0.1."
+  IPv4 address, as a browser parses it, e.g. 10.0.0.1 or 0x7f.0.0.1."
   [host]
   (let [h (str/replace (str/lower-case (str host)) #"\.$" "")]
     (and (str/includes? h ".")
@@ -385,12 +387,12 @@
 
 (defn public-host?
   "Whether the host of the http or https URL `url` is on the public
-  internet by its text alone, with no lookup of the name: an address of
-  the public internet, or a name that public-name? takes.
+  internet by its text alone, without looking up the name: a public
+  address, or a name that public-name? accepts.
 
-  A name can still lead to an address on a local network, which public?
-  checks on the JVM and in Node, so use this where a lookup can't be made
-  or costs too much, e.g. to check many links at once."
+  A name can still resolve to an address on a local network, which public?
+  checks on the JVM and in Node. So use this where you can't look up a
+  name or it costs too much, e.g. to check many links at once."
   [url]
   (let [h (some-> (host url) (str/replace #"\.$" ""))]
     (boolean (and h
@@ -401,22 +403,22 @@
 #?(:cljs
    (def ^:dynamic ^:no-doc *addresses*
      "The addresses that send! looked up in Node for the host of a request,
-     while it asks the :allow-pred of the request: a map of the host to the
-     numbers of each address, or nil for an address that doesn't read."
+     bound while it calls the request's :allow-pred: a map of the host to
+     the numbers of each address (nil for an address that doesn't parse)."
      {}))
 
 (defn public?
   "Whether the host of the http or https URL `url` is on the public
-  internet rather than on the network of the app or of its device.
+  internet rather than on the app's own device or network.
 
-  On the JVM each address that the name resolves to must be public, and a
-  name that doesn't resolve isn't. In ClojureScript the host must pass
-  public-host?, and when send! asks in Node, each address of the name must
-  be public too."
+  On the JVM each address that the name resolves to has to be public, and
+  a name that doesn't resolve isn't public. In ClojureScript the host has
+  to pass public-host?. When send! calls this in Node, each address of the
+  name has to be public too."
   [url]
   #?(:clj  (try
-             ;; the host as the URL Standard reads it, which legal-url
-             ;; gives the client of the JDK that sends the request
+             ;; the host as the URL Standard parses it, which is the host
+             ;; in the URL that legal-url returns for the JDK's client
              (let [h (host url)]
                (boolean (and h
                              ;; the JVM caches these for 30 seconds, so the

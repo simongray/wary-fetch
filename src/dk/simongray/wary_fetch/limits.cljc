@@ -1,14 +1,14 @@
 (ns ^:no-doc dk.simongray.wary-fetch.limits
-  "The limits of an exchange, which every client keeps: where a request may
-  go, what its headers may hold, how long it may take and how much of a
-  body it reads, and the exceptions of the requests that go beyond them or
+  "The limits that every client applies to an exchange (where a request
+  may go, what its headers may hold, how long it may take and how much of
+  a body it reads), and the exceptions of requests that go beyond them or
   never reach a server."
   (:require [dk.simongray.wary-fetch :as-alias http]
             [dk.simongray.wary-fetch.secret :as secret]))
 
 (def default-max-bytes
-  "How much of a response body is read at most, unless the request sets
-  another limit: 100 MB."
+  "How much of a response body a client reads at most, unless the request
+  sets another limit: 100 MB."
   (* 100 1024 1024))
 
 (defn refusal
@@ -30,7 +30,7 @@
 
 (defn invalid-header
   "The exception of a request to `url` whose `headers` have one that
-  unsendable-header finds. It names that header but leaves out the value,
+  unsendable-header returns. It names that header but leaves out the value,
   which can be a secret (e.g. a token read from a file with its line
   break)."
   [url headers]
@@ -81,7 +81,7 @@
 
 (defn unresolved
   "The exception of a request to `url` whose host name doesn't resolve,
-  with the `cause` that the platform gave, or nil."
+  with the platform's `cause`, or nil."
   [url cause]
   (ex-info (str "The host of " url " was not found")
            {:type ::http/unresolved :url url}
@@ -89,7 +89,7 @@
 
 (defn unreachable
   "The exception of a request to `url` whose host couldn't be reached, with
-  the `cause` that the platform gave."
+  the platform's `cause`."
   [url cause]
   (ex-info (str "The host of " url " could not be reached")
            {:type ::http/unreachable :url url}
@@ -97,8 +97,7 @@
 
 (defn tls-failure
   "The exception of a request to `url` whose secure connection failed, with
-  the `cause` that the platform gave and its `reason`, e.g. an expired
-  certificate."
+  the platform's `cause` and its `reason`, e.g. an expired certificate."
   [url cause reason]
   (ex-info (str "The secure connection to " url " failed"
                 (when reason (str ": " reason)))
@@ -107,8 +106,9 @@
 
 (defn prefix-length
   "How much of the body of an answer of `status` to read for a request of
-  the bytes `range`, or nil to read all of it. The answer sends from
-  `start`, it can be `gzipped?`, and the body is read to `max-bytes`.
+  the bytes `range`, or nil to read all of it. The answer starts at the
+  byte `start` and may be `gzipped?`. A client reads at most `max-bytes`
+  of its body.
 
   - Of a 206, it's the bytes from the start to the end of the range,
     since a server can send more than was asked.

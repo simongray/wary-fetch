@@ -1,7 +1,7 @@
 (ns ^:no-doc dk.simongray.wary-fetch.jvm
-  "The client of the JVM: java.net.http, with redirects followed here
-  rather than by the JDK, and bodies read within the limits of time and
-  size."
+  "The client on the JVM: java.net.http, with redirects that this
+  namespace follows rather than the JDK, and bodies read within the limits
+  of time and size."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]
@@ -27,8 +27,8 @@
            [javax.net.ssl SSLException]))
 
 (defonce ^{:doc "The shared HTTP client, built on first use, with a
-  connect timeout of 15 seconds. Redirects are left to send!, which
-  follows them."}
+  connect timeout of 15 seconds. It leaves redirects to send!, which
+  follows them itself."}
   client
   (delay (-> (HttpClient/newBuilder)
              (.followRedirects HttpClient$Redirect/NEVER)
@@ -43,9 +43,9 @@
         (.map (.headers response))))
 
 (defn pump
-  "Read `in` from `url` in pieces to its end, or to `limit` bytes when it's
-  given, give each piece to `f`, and throw ::too-large once more than
-  `max-bytes` have arrived. It gives how many bytes it read.
+  "Read `in` from `url` in pieces to its end (or to `limit` bytes when
+  given), pass each piece to `f` and return how many bytes it read. It
+  throws ::too-large once more than `max-bytes` have arrived.
 
   The `f` takes the buffer and the length of the piece. With nil
   `max-bytes`, it reads everything."
@@ -93,9 +93,9 @@
   instant `deadline` in epoch milliseconds, or until the `signal` of the
   request says to stop.
 
-  At the deadline, the stream is closed and ::timeout thrown, so that a
-  server that sends its body slowly holds no thread for longer, and when
-  the signal says to stop, ::aborted."
+  At the deadline it closes the stream and throws ::timeout, so that a
+  server that sends its body slowly holds no thread for longer. When the
+  signal says to stop, it throws ::aborted."
   [^InputStream in deadline url signal f]
   (let [late?    (atom false)
         stopped? (atom false)
@@ -152,7 +152,7 @@
   "The `body` bytes of the response with `headers` as a string, gunzipped
   to at most `max-bytes` when the response says so.
 
-  With nil `max-bytes`, there's no limit. The body is decoded in the
+  With nil `max-bytes`, there's no limit. It decodes the body in the
   charset of the Content-Type, or else the one that an HTML page or an
   XML document names."
   ([headers body]
@@ -164,8 +164,8 @@
   "The java.net.http request of `method` to `uri`, with `headers`, the
   `body` string and a timeout of `timeout-ms` milliseconds.
 
-  Gzip is accepted unless the headers name an Accept-Encoding. A header
-  and a body that are hidden texts go out as their texts."
+  It accepts gzip unless the headers name an Accept-Encoding, and sends
+  hidden headers and a hidden body as their texts."
   ^HttpRequest [^URI uri method headers body timeout-ms]
   (let [gzip?   (not-any? #(= "accept-encoding" (str/lower-case (str %)))
                           (keys headers))
@@ -250,15 +250,15 @@
   "Send the `request`, follow its redirects until the instant `deadline`
   in epoch milliseconds, and check each URL with `allow-pred`.
 
-  It gives the last response and the redirects before it, each as a
-  vector of its status, URL and headers. It follows the redirects itself,
-  since the JDK sends credentials on to another origin. A URL that
+  It returns a pair of the last response and the redirects before it,
+  each a vector of its status, URL and headers. It follows the redirects
+  itself, since the JDK sends credentials on to another origin. A URL that
   `allow-pred` refuses throws ::refused, or ::unresolved when its host is
   a name that doesn't resolve, as url/public? refuses such a name. A
   header value that the JDK would refuse throws ::invalid-header, since
   the JDK's own exception shows the value. Once the :signal of the request
   says to stop, it throws ::aborted. The :prepare-fn of the request, when
-  it has one, gives the request of each hop."
+  it has one, returns the request of each hop."
   [request deadline allow-pred]
   (loop [request (update request :url url/legal-url)
          chain   []]
@@ -298,10 +298,10 @@
                      (conj chain [status url (headers-of response)]))))))))
 
 (defn- cut-bytes
-  "The bytes of the body `in` of an answer from `url` with `headers`, with
-  gzip undone, read until `deadline` or the `signal`, but no further than
-  `max-bytes`, as response-bytes gives them, :truncated? when there were
-  more."
+  "The bytes of the body `in` of an answer from `url` with `headers`, cut
+  at `max-bytes`, as response-bytes returns them. It undoes gzip and reads
+  until `deadline` or the `signal`. The map has :truncated? when the body
+  was longer."
   [^InputStream in headers url max-bytes deadline signal]
   (let [out (ByteArrayOutputStream.)]
     ;; one byte more, to tell a body cut short from one that just fits
@@ -316,10 +316,11 @@
        :truncated? cut?})))
 
 (defn- response-bytes
-  "The bytes of the body of `response` to `request`, read until `deadline`,
-  no more than the range of the request needs, as a map of the :bytes, and
-  :inflated? when gzip is undone already. With the :truncate? of the
-  request, a body larger than its :max-bytes is cut, and :truncated?."
+  "The bytes of the body of `response` to `request`, read until `deadline`
+  and no further than the request's range needs, as a map of the :bytes,
+  with :inflated? when gzip is already undone. With the request's
+  :truncate?, it cuts a body larger than its :max-bytes and adds
+  :truncated?."
   [^HttpResponse response
    {:keys [method url range max-bytes truncate? signal] :as request}
    deadline]
@@ -346,9 +347,8 @@
         {:bytes (read-within in deadline max-bytes url signal)}))))
 
 (defn- answer
-  "The response map for the `response` of the JDK to `request`, with the
-  `body` as response-bytes gives it, which came after the redirects
-  `chain`."
+  "The response map for the JDK's `response` to `request` after the
+  redirects `chain`, with the `body` as response-bytes returns it."
   [^HttpResponse response {:keys [^bytes bytes inflated? truncated?] :as body}
    chain {:keys [as max-bytes] :as request}]
   (let [status   (.statusCode response)
@@ -374,7 +374,7 @@
       truncated?  (assoc :truncated? true))))
 
 (defn- sink-fn
-  "A function of a buffer and the length of a piece in it that gives the
+  "A function of a buffer and the length of a piece in it that passes the
   piece to `sink`: an OutputStream, or a function of the bytes of each
   piece."
   [sink]
@@ -385,9 +385,9 @@
       (sink (Arrays/copyOf buffer (int n))))))
 
 (defn- sunk!
-  "Give the body of `response` to `request` to its :sink in pieces until
-  `deadline`, with gzip undone, no more than its range needs and within
-  its :max-bytes, and give how many bytes the sink got."
+  "Pass the body of the `response` to the :sink of the `request` in pieces
+  until `deadline`, and return how many bytes the sink got. It undoes
+  gzip, passes no more than the range needs and stays within :max-bytes."
   [^HttpResponse response
    {:keys [url range max-bytes sink signal] :as request}
    deadline]
@@ -404,8 +404,8 @@
 
 (defn send!
   "Send the `request` within `timeout-seconds`, to URLs that `allow-pred`
-  takes, and give the response. The body of a success goes to the :sink of
-  the request, when it has one."
+  takes, and return the response. The body of a success goes to the :sink
+  of the request, when it has one."
   [{:keys [method sink] :as request} timeout-seconds allow-pred]
   (let [deadline         (+ (System/currentTimeMillis)
                             (* 1000 timeout-seconds))
@@ -420,10 +420,10 @@
 
 (defn digests!
   "Send the `request` within `timeout-seconds`, to URLs that `allow-pred`
-  takes, and give the :status, the :url and, for a 200, the :digests of
-  the body by the MessageDigest `algorithms`, as a map of each algorithm
-  to the bytes of its digest. The body streams through the digests, and
-  none of it is kept."
+  takes, and return the :status, the :url and for a 200 the :digests of
+  the body by the MessageDigest `algorithms`. The digests are a map of
+  each algorithm to the bytes of its digest. The body streams through
+  them without being kept."
   [request algorithms timeout-seconds allow-pred]
   (let [deadline       (+ (System/currentTimeMillis)
                           (* 1000 timeout-seconds))

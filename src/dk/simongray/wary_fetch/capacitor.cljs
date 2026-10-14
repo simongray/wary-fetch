@@ -8,13 +8,13 @@
 
       (def send (capacitor/sender CapacitorHttp))
 
-  It sends a request as send! does, with the same limits, and gives the
-  same response. It follows the redirects itself, so that :allow-pred
-  takes each URL, and it decodes text by its charset, since the plugin
-  reads all text as UTF-8. The plugin hands a body over whole, so the
-  sender suits feeds and the calls of APIs rather than episodes, which
-  the plugin's docs leave to a plugin for file transfers. Capacitor's HTTP
-  API is at https://capacitorjs.com/docs/apis/http"
+  The sender sends a request as send! does, with the same limits, and
+  returns the same response. It follows redirects itself, so that
+  :allow-pred checks each URL. It decodes text by its charset, since the
+  plugin decodes all text as UTF-8. The plugin hands over a body whole, so
+  the sender suits feeds and API calls rather than episodes, which the
+  plugin's docs leave to a plugin for file transfers. Capacitor's HTTP API
+  is at https://capacitorjs.com/docs/apis/http"
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.encoding :as encoding]
@@ -32,8 +32,8 @@
 
 (defn- options
   "The options of CapacitorHttp.request for the prepared `request`, within
-  `timeout-ms`. The body comes as bytes in base64, and the plugin follows
-  no redirect."
+  `timeout-ms`. With them, the plugin returns the body as bytes in base64
+  and follows no redirect."
   [{:keys [method url headers body range user-agent]} timeout-ms]
   (let [agent   (or user-agent http/user-agent)
         headers (cond-> (merge {"User-Agent" agent} headers)
@@ -54,16 +54,17 @@
 
 (defn- headers-of
   "The headers of the answer `res` of the plugin, by their names in lower
-  case, each with its value in a vector, as send! gives them."
+  case, each with its value in a vector, as send! returns them."
   [^js res]
   (into {}
         (map (fn [[k v]] [(str/lower-case k) [(str v)]]))
         (js->clj (or (.-headers res) #js {}))))
 
 (defn- body-of
-  "The bytes of the `data` that the plugin gave for an answer with the
-  `headers`. It gives bytes in base64, but the value of a JSON body, which
-  it parses whatever was asked for, and its text when that doesn't parse."
+  "The bytes of the `data` that the plugin returned for an answer with the
+  `headers`. The plugin returns bytes in base64, except for a JSON body,
+  which it parses whatever was asked for, or returns as text when that
+  doesn't parse."
   [data headers]
   (let [json? (str/includes? (str (headers/header headers "content-type"))
                              "application/json")]
@@ -88,13 +89,13 @@
               #(js/clearTimeout @timer))))
 
 (defn- send-following!
-  "A promise of the answer of the plugin `http` to `request`, its headers,
-  the redirects before it and the last request, as a vector. It follows
-  the redirects until the instant `deadline` and checks each URL with
-  `allow-pred`. A header value that the JDK and node:http refuse rejects
-  with ::invalid-header, since a native client can throw with the value.
-  The :prepare-fn of the request, when it has one, gives the request of
-  each hop."
+  "A promise of the answer of the plugin `http` to `request`, as a vector
+  with its headers, the redirects before it and the last request. It
+  follows the redirects until the instant `deadline` and checks each URL
+  with `allow-pred`. A header value that the JDK and node:http refuse
+  rejects with ::invalid-header, since a native client can throw with the
+  value. The :prepare-fn of the request, when it has one, returns the
+  request of each hop."
   [^js http request deadline allow-pred]
   (letfn [(step [request chain]
             (.then (redirect/hop request)
@@ -138,8 +139,8 @@
     (step (update request :url url/legal-url) [])))
 
 (defn- answer
-  "A promise of the response map for the answer `res` of the plugin, with
-  `headers`, to the `request` after the redirects `chain`. The body of a
+  "A promise of the response map for the plugin's answer `res` with
+  `headers` to the `request`, after the redirects `chain`. The body of a
   success goes to the :sink of the request, when it has one."
   [^js res headers chain
    {:keys [method url as range max-bytes truncate? sink] :as request}]
@@ -180,14 +181,15 @@
                                (encoding/decode b headers)))))))
 
 (defn sender
-  "A function to give as :send, which sends each request with `http`, the
-  CapacitorHttp plugin of @capacitor/core, and gives a promise of the
+  "A function to pass as :send, which sends each request with `http` (the
+  CapacitorHttp plugin of @capacitor/core) and returns a promise of the
   response, as send! does.
 
-  The keys of a request are those of send!, and a :sink is a function of
-  the bytes, which it gets in one piece. A failure that the plugin reports
-  is ::http/unreachable, since it says no more of why. The plugin can't
-  stop a request, so the :signal of one is checked before it's sent."
+  The keys of a request are those of send!. A :sink is a function of the
+  bytes, which it gets in one piece. A failure that the plugin reports is
+  ::http/unreachable, since the plugin doesn't say why it failed. The
+  plugin can't stop a request, so the sender checks its :signal only
+  before sending it."
   [^js http]
   (fn [{:keys [url timeout-seconds allow-pred as signal]
         :or   {timeout-seconds 30 allow-pred (constantly true)}

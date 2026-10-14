@@ -1,14 +1,14 @@
 (ns dk.simongray.wary-fetch.async
   "Futures on the JVM and promises in ClojureScript behind one set of
-  functions so that code that waits for answers is written once. The
+  functions, so that you write code that waits for answers only once. The
   functions take a value, a future or a promise alike."
   (:refer-clojure :exclude [iteration some])
   (:require [clojure.string :as str]))
 
 (defn then
-  "The result of `f` on `x` once `x` is a value: at once when it's one or
-  when `x` (a future on the JVM or a promise in ClojureScript) has its
-  value."
+  "The result of `f` on the value of `x` (in ClojureScript a promise of
+  it). The `x` is a value, a future on the JVM or a promise in
+  ClojureScript."
   [x f]
   #?(:clj  (f (if (future? x) @x x))
      :cljs (.then (js/Promise.resolve x) f)))
@@ -17,13 +17,12 @@
 
 (defn all
   "The values of `xs` (each a value, a future or a promise) as a vector,
-  or the results of `f` on each of them. On the JVM it gives the vector
-  once every future has its value, and the futures run at once. In
-  ClojureScript it gives a promise of it.
+  or the results of `f` on each of them (in ClojureScript a promise of
+  it). On the JVM it returns once every future has its value, and the
+  futures run at once.
 
-  With `f` every call is under way before any is waited for, e.g.
-  (all force [(delay (a!)) (delay (b!))]) makes two different calls at
-  once."
+  With `f`, every call is under way before it waits for any, e.g.
+  (all force [(delay (a!)) (delay (b!))]) runs a! and b! at once."
   ([xs]
    #?(:clj  (mapv #(if (future? %) @% %) (vec xs))
       :cljs (.then (js/Promise.all (into-array xs)) vec)))
@@ -38,8 +37,8 @@
       :cljs (all (map f xs)))))
 
 (defn in-groups
-  "The results of `f` on each of `xs` as a vector, `n` calls at a time, in
-  a future or a promise."
+  "The results of `f` on each of `xs` as a vector, with `n` calls at a time
+  (in ClojureScript a promise of it)."
   [f n xs]
   (reduce (fn [acc group]
             (then acc (fn [done] (then (all f group) #(into done %)))))
@@ -48,11 +47,10 @@
 
 (defn some
   "The first logical true result of `f` on the `xs`, or nil, as
-  clojure.core/some gives it. On the JVM it gives the result, and in
-  ClojureScript a promise of it.
+  clojure.core/some returns it (in ClojureScript a promise of it).
 
-  Each call of `f` gives a value, a future or a promise, and the calls go
-  one at a time, so none is made after the first true result."
+  Each call of `f` returns a value, a future or a promise. The calls go
+  one at a time, so it makes none after the first true result."
   [f xs]
   (reduce (fn [found x] (then found #(or % (f x))))
           ;; a promise in ClojureScript, even when there are no xs
@@ -60,13 +58,13 @@
           xs))
 
 (defn attempt
-  "The result of calling `f` as a map of its :value (in a future or a
-  promise). When `f` throws (or in ClojureScript rejects), the map has the
-  :error instead.
+  "The result of calling `f` as a map of its :value, in a future on the
+  JVM and a promise in ClojureScript. When `f` throws (or in ClojureScript
+  rejects), the map has the :error instead.
 
   On the JVM each attempt runs on a future of its own, so several run at
-  once. Errors count too (e.g. the StackOverflowError of deeply nested
-  input), as anything thrown does in ClojureScript."
+  once. Errors count too, e.g. a StackOverflowError from deeply nested
+  input, as anything thrown does in ClojureScript."
   [f]
   #?(:clj  (future (try {:value (f)} (catch Throwable e {:error e})))
      :cljs (-> (js/Promise.resolve nil)
@@ -75,13 +73,13 @@
                (.catch (fn [e] {:error e})))))
 
 (defn iteration
-  "The values that clojure.core/iteration gives for `step!` and `opts` as
-  a vector of at most :limit values (or in ClojureScript a promise of it).
+  "The values that clojure.core/iteration returns for `step!` and `opts`,
+  as a vector of at most :limit values (in ClojureScript a promise of it).
 
   The `opts` are the :somef, :vf, :kf and :initk of
-  clojure.core/iteration, and :limit. The `step!` function gives a value,
-  a future or a promise. So both platforms read an API that answers in
-  pages as the example of clojure.core/iteration does:
+  clojure.core/iteration, and :limit. The `step!` function returns a
+  value, a future or a promise, so the same code pages through an API on
+  both platforms, as in the example of clojure.core/iteration:
 
       (iteration get-page! :initk \"a\" :vf :items :kf :next-page :limit 10)"
   [step! & {:keys [somef vf kf initk limit]
@@ -114,9 +112,9 @@
   "The message of the failure `e`, with the messages of its causes that
   add to it. The `e` is an exception, or another value that was thrown.
 
-  The client of the JDK and the fetch of Node give the reason that a
-  connection failed in a cause, e.g. a java.net.ConnectException with the
-  cause java.nio.channels.UnresolvedAddressException."
+  The JDK's client and Node's fetch put the reason that a connection
+  failed in a cause, e.g. a java.net.ConnectException with the cause
+  java.nio.channels.UnresolvedAddressException."
   [e]
   (->> (iterate #?(:clj ex-cause :cljs #(some-> % .-cause)) e)
        (take-while some?)

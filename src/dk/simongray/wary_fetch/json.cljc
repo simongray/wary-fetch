@@ -4,8 +4,10 @@
 
   An object reads as a map with keyword keys, unless a :key-fn says
   otherwise, an array as a vector, and a number as a long when it's an
-  integer that fits, or else as a double. In JavaScript every number is a
-  double, so an integer past 2^53 loses its last digits there."
+  integer that fits, or else as a double. On the JVM, a longer integer
+  reads as a bigint, and read-json returns nil for a text with an integer
+  of more than max-digits digits. In JavaScript every number is a double,
+  so an integer past 2^53 loses its last digits there."
   #?(:cljs (:require [goog.object :as gobj]))
   #?(:clj (:import [java.time Instant ZoneOffset]
                    [java.time.format DateTimeFormatter])))
@@ -14,6 +16,16 @@
   "How deep the arrays and objects of a JSON text may nest, so that a
   hostile text can't use up the stack."
   512)
+
+;; RFC 8259, section 9
+(def max-digits
+  "How many digits an integer of a JSON text may have on the JVM, where
+  the time to read a bigint grows with the square of its digits.
+
+  A decimal reads as a double, in a time that grows with its length alone,
+  so it has no such limit. Nor does a number in ClojureScript, where
+  JSON.parse reads every number as a double."
+  1000)
 
 #?(:clj
    (defn- malformed
@@ -61,17 +73,18 @@
      [^String s ^long i]
      (let [n      (.length s)
            at     (fn [j] (when (< j n) (.charAt s j)))
-           j      (if (= \- (at i)) (inc i) i)
-           j      (if (= \0 (at j)) (inc j) (digits-end s j))
+           start  (if (= \- (at i)) (inc i) i)
+           j      (if (= \0 (at start)) (inc start) (digits-end s start))
            int?   (not (#{\. \e \E} (at j)))
            j      (if (= \. (at j)) (digits-end s (inc j)) j)
            j      (if (#{\e \E} (at j))
                     (digits-end s (if (#{\+ \-} (at (inc j))) (+ j 2) (inc j)))
                     j)
            text   (subs s i j)]
-       [(if int?
-          (or (parse-long text) (bigint text))
-          (Double/parseDouble text))
+       [(cond
+          (not int?)                 (Double/parseDouble text)
+          (> (- j start) max-digits) (throw (malformed))
+          :else                      (or (parse-long text) (bigint text)))
         j])))
 
 ;; RFC 8259, section 7
@@ -190,7 +203,8 @@
 
 (defn read-json
   "The value of the JSON text `s`, read by the `opts` below, or nil when `s`
-  isn't JSON or nests deeper than max-depth.
+  isn't JSON, nests deeper than max-depth or, on the JVM, has an integer of
+  more than max-digits digits.
 
   The `opts` are :key-fn, a function of the name of each member of an
   object that gives its key, keyword by default."

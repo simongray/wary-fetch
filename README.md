@@ -32,12 +32,12 @@ their encodings.
 Getting started
 ---------------
 
-It requires Clojure 1.11+ and Java 11+. Add it from
+It requires Clojure 1.11+ and Java 11+, or Node 20.16+ or 22.3+. Add it from
 [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the `:deps` in
 your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.14.2"}
+dk.simongray/wary-fetch {:mvn/version "0.15.0"}
 ```
 
 For unreleased changes, depend on the latest commit on `master` instead.
@@ -347,6 +347,15 @@ checks as in Node, except that it doesn't look up names:
 
 The plugin hands over each body whole, so leave large files, e.g.
 episodes, to a plugin for file transfers.
+
+### React Native
+
+In React Native, requests go through fetch, and no CORS limits what it
+reaches. So the library follows redirects itself and calls the
+`:allow-pred` on each, as in Node, but like a page it can't look up
+names. Expo's fetch
+streams the body, so `:max-bytes` stops a large one as it arrives, while
+React Native's own fetch hands the body over whole.
 
 ### Electron
 

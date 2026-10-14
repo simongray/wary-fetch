@@ -10,8 +10,9 @@
   "The first `n` bytes of `b` at most, a character for each byte."
   [b n]
   (let [n (min n #?(:clj (alength ^bytes b) :cljs (.-length b)))]
+    ;; by the byte, since the TextDecoder of Hermes knows only UTF-8
     #?(:clj  (String. ^bytes b 0 (int n) "ISO-8859-1")
-       :cljs (.decode (js/TextDecoder. "latin1") (.subarray b 0 n)))))
+       :cljs (.apply (.-fromCharCode js/String) nil (.subarray b 0 n)))))
 
 (defn- declared-encoding
   "The encoding that the XML declaration of the bytes `b` names, or nil."

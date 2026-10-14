@@ -13,19 +13,20 @@
             [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]))
 
+;; process.getBuiltinModule, from Node 20.16 and 22.3, rather than require,
+;; since a bundler such as Metro refuses a require of a name that isn't
+;; written out
 (def available?
-  "Whether the code runs in Node, or in a runtime that has its modules."
+  "Whether the code runs in Node 20.16, 22.3 or later, or in a runtime that
+  has its modules."
   (boolean (and (exists? js/process)
                 (some-> js/process .-versions .-node)
-                (or (exists? js/process.getBuiltinModule)
-                    (exists? js/require)))))
+                (exists? js/process.getBuiltinModule))))
 
 (defn- module
   "The built-in module `module-name` of Node, e.g. node:http."
   [module-name]
-  (if (exists? js/process.getBuiltinModule)
-    (.getBuiltinModule js/process module-name)
-    (js/require module-name)))
+  (.getBuiltinModule js/process module-name))
 
 (defn- by-deadline
   "The promise `p`, or one that rejects with what `late` returns at the

@@ -325,3 +325,51 @@
            (.then (timeout base)
                   (fn [type]
                     (is (= ::http/timeout type) "and one whose body stops"))))))))
+
+(deftest the-redirects-of-a-fetch-outside-a-browser
+  (let [seen (atom [])
+        send #(browser/send! (http/prepared %) 5 (or (:allow-pred %) (constantly true)))]
+    (run
+      #(with-node-server
+         (fn [^js req res]
+           (swap! seen conj (.-url req))
+           (case (.-url req)
+             "/moved"   (answer res 301 {"Location" "/feed"} nil)
+             "/private" (answer res 302 {"Location" "/lan"} nil)
+             (answer res 200 {} "ok")))
+         (fn [base]
+           (-> (send {:url (str base "/moved")})
+               (.then (fn [{:keys [status url permanent-url redirects body]}]
+                        (is (= [200 (str base "/feed") (str base "/feed") "ok"]
+                               [status url permanent-url body]))
+                        (is (= [[301 (str base "/moved")]] (map (juxt first second) redirects))
+                            "the client follows each redirect itself, where no same-origin policy guards fetch")
+                        (reset! seen [])
+                        (http/try-send! send {:url        (str base "/private")
+                                              :allow-pred (fn [u] (not (str/ends-with? u "/lan")))})))
+               (.then (fn [{:keys [error]}]
+                        (is (= ::http/refused (:type (ex-data error))))
+                        (is (= ["/private"] @seen) ":allow-pred takes the URL of each redirect")))))))))
+
+(deftest a-fetch-without-streams
+  (let [real (.-fetch js/globalThis)
+        ;; as React Native's own fetch answers: a whole body, and no stream
+        fake (fn [url _]
+               (js/Promise.resolve
+                #js {:status      200
+                     :url         url
+                     :headers     (js/Headers. #js {"content-type" "text/plain"})
+                     :body        nil
+                     :arrayBuffer (fn []
+                                    (js/Promise.resolve
+                                     (.-buffer (.encode (js/TextEncoder.) "a whole body"))))}))
+        send #(browser/send! (http/prepared %) 5 (constantly true))]
+    (set! (.-fetch js/globalThis) fake)
+    (run
+      #(-> (send {:url "https://a.example/feed"})
+           (.then (fn [{:keys [body]}]
+                    (is (= "a whole body" body))
+                    (http/try-send! send {:url "https://a.example/feed" :max-bytes 5})))
+           (.then (fn [{:keys [error]}]
+                    (is (= ::http/too-large (:type (ex-data error))) "within the limits all the same")))
+           (.finally (fn [] (set! (.-fetch js/globalThis) real)))))))

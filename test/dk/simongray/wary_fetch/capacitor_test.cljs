@@ -77,11 +77,26 @@
                (is (= [404 nil] [status body]))))
      #(.then (send {:method :post :url "https://a.example/api" :body (bytes/of [1 2 3])})
              (fn [_]
-               (is (= ["POST" "AQID" "file"] ((juxt :method :data :dataType) (peek @asked)))
-                   "bytes go as base64, which the plugin decodes for a file")))
+               (let [o (peek @asked)]
+                 (is (= ["POST" "AQID" "file"] ((juxt :method :data :dataType) o))
+                     "bytes go as base64, which the plugin decodes for a file")
+                 (is (= "application/octet-stream" (get (update-keys (:headers o) name) "Content-Type"))
+                     "with a Content-Type, without which the plugin on iOS sends no body"))))
      #(.then (send {:method :post :url "https://a.example/api" :body "{}"})
              (fn [_]
-               (is (= ["{}" nil] ((juxt :data :dataType) (peek @asked))))))
+               (let [o (peek @asked)]
+                 (is (= ["{}" nil] ((juxt :data :dataType) o)))
+                 (is (= "text/plain;charset=UTF-8" (get (update-keys (:headers o) name) "Content-Type"))
+                     "text with the type that fetch gives it"))))
+     #(.then (send {:method :post :url "https://a.example/api" :body "{}" :headers {"content-type" "application/json"}})
+             (fn [_]
+               (is (= {"content-type" "application/json"}
+                      (select-keys (update-keys (:headers (peek @asked)) name) ["content-type" "Content-Type"]))
+                   "and a type that the request names, in any case, stays")))
+     #(.then (send {:url "https://a.example/api"})
+             (fn [_]
+               (is (not-any? #{"Content-Type"} (map name (keys (:headers (peek @asked)))))
+                   "a request without a body has no type")))
      #(.then (failure-type send {:url "https://a.example/big" :max-bytes 10})
              (fn [type] (is (= ::http/too-large type))))
      #(.then (send {:url "https://a.example/big" :max-bytes 10 :truncate? true})

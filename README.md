@@ -37,7 +37,7 @@ It requires Clojure 1.11+ and Java 11+. Add it from
 your `deps.edn`:
 
 ```clojure
-dk.simongray/wary-fetch {:mvn/version "0.14.1"}
+dk.simongray/wary-fetch {:mvn/version "0.14.2"}
 ```
 
 For unreleased changes, depend on the latest commit on `master` instead.

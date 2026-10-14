@@ -30,15 +30,36 @@
   [s]
   (js/Uint8Array.from (js/atob s) #(.charCodeAt % 0)))
 
+;; Fetch, "extract a body", for text; RFC 9110, section 8.3, for bytes
+(defn- default-content-type
+  "The Content-Type of `body` when the request names none, as fetch gives
+  text, and application/octet-stream for bytes, or nil without a body."
+  [body]
+  (cond
+    (string? body)                 "text/plain;charset=UTF-8"
+    (instance? js/Uint8Array body) "application/octet-stream"))
+
+(defn- with-content-type
+  "The request `headers` with the default Content-Type of `body`, unless
+  they name one. The plugin on iOS sends no body without a Content-Type."
+  [headers body]
+  (let [named? (some #(= "content-type" (str/lower-case (name %)))
+                     (keys headers))
+        type   (default-content-type body)]
+    (cond-> headers
+      (and type (not named?)) (assoc "Content-Type" type))))
+
 (defn- options
   "The options of CapacitorHttp.request for the prepared `request`, within
   `timeout-ms`. With them, the plugin returns the body as bytes in base64
   and follows no redirect."
   [{:keys [method url headers body range user-agent]} timeout-ms]
   (let [agent   (or user-agent http/user-agent)
-        headers (cond-> (merge {"User-Agent" agent} headers)
-                  ;; the offsets of a range are those of the file
-                  range (assoc "Accept-Encoding" "identity"))]
+        headers (-> (merge {"User-Agent" agent} headers)
+                    (cond->
+                      ;; the offsets of a range are those of the file
+                      range (assoc "Accept-Encoding" "identity"))
+                    (with-content-type body))]
     (clj->js
      (cond-> {:url                   url
               :method                (str/upper-case (name (or method :get)))
@@ -186,7 +207,9 @@
   response, as send! does.
 
   The keys of a request are those of send!. A :sink is a function of the
-  bytes, which it gets in one piece. A failure that the plugin reports is
+  bytes, which it gets in one piece. A body without a Content-Type is sent
+  as text/plain or application/octet-stream, since the plugin on iOS drops
+  a body without one. A failure that the plugin reports is
   ::http/unreachable, since the plugin doesn't say why it failed. The
   plugin can't stop a request, so the sender checks its :signal only
   before sending it."

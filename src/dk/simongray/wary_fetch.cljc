@@ -139,6 +139,12 @@
   - :signal, to stop the exchange: an AbortSignal in ClojureScript, and
     on the JVM an atom or another thing that derefs without waiting,
     which turns truthy to stop it
+  - :prepare-fn, a function of the request of each hop (the first, and
+    each redirect) that returns the request to send (or a future or a
+    promise of it), e.g. to sign each hop for its URL. It gets the request
+    as the client sends it, with its query and its User-Agent, and its
+    hidden texts revealed. A browser follows its own redirects, so there
+    it gets the first hop alone.
 
   The response is a map of :status, the final :url, :headers and :body.
   The body has gzip undone and text decoded by its charset. A 206 also

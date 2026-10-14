@@ -129,6 +129,9 @@ you send with `http/send!`. It can also have these keys:
 - `:sink`, to take the body in pieces, see [Media files](#media-files)
 - `:signal`, to stop the exchange, e.g. when the user cancels: an
   AbortSignal in ClojureScript, or on the JVM an atom that turns true
+- `:prepare-fn`, a function that returns the request of each hop, the
+  first and each redirect, e.g. to sign it for its own URL, as
+  [httpsig-clj](https://github.com/simongray/httpsig-clj) does
 
 A request to any URL goes through, unless its `:allow-pred` says
 otherwise. To send one to the public internet only, as `http/fetch!`

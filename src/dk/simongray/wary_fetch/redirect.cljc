@@ -50,6 +50,22 @@
                       (into {} (remove credential?)))
            :body    (when-not get? body))))
 
+(defn hop
+  "The request of a hop, the first or one after a redirect, as the
+  :prepare-fn of the `request` returns it (e.g. signed for its URL), or the
+  request itself without one. On the JVM it's the request, after the
+  future that the function returns when it does, and in ClojureScript a
+  promise of it. The request keeps the function for the next hop."
+  [{:keys [prepare-fn] :as request}]
+  (let [keep-fn #(assoc % :prepare-fn prepare-fn)]
+    #?(:clj  (if prepare-fn
+               (let [r (prepare-fn request)]
+                 (keep-fn (if (future? r) @r r)))
+               request)
+       :cljs (if prepare-fn
+               (.then (js/Promise.resolve (prepare-fn request)) keep-fn)
+               (js/Promise.resolve request)))))
+
 (defn permanent-url
   "The URL that the first request moved to for good, by the redirects in
   `chain` before `final-url`, or nil when the first isn't permanent.

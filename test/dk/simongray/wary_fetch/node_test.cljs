@@ -127,7 +127,17 @@
                         (failure-type {:url        (str base "/for-now")
                                        :allow-pred (fn [u] (not (str/ends-with? u "/feed")))})))
                (.then (fn [type]
-                        (is (= ::http/refused type) ":allow-pred takes the URL of each redirect")))))))))
+                        (is (= ::http/refused type) ":allow-pred takes the URL of each redirect")
+                        (reset! seen [])
+                        (http/send! {:url        (str base "/away")
+                                     :prepare-fn (fn [hop]
+                                                   (js/Promise.resolve
+                                                    (assoc-in hop [:headers "Authorization"] (str "Hop " (:url hop)))))})))
+               (.then (fn [_]
+                        (is (= [["/away" (str "Hop " base "/away")]
+                                ["/feed" (str "Hop " (str/replace base "127.0.0.1" "localhost") "/feed")]]
+                               @seen)
+                            "a :prepare-fn gives the request of each hop, as a promise too")))))))))
 
 (deftest addresses-in-node
   (let [asked (atom nil)]

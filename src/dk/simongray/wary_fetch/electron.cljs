@@ -23,6 +23,7 @@
             [dk.simongray.wary-fetch.async :as async]
             [dk.simongray.wary-fetch.json :as json]
             [dk.simongray.wary-fetch.limits :as limits]
+            [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def ^:no-doc request-keys
@@ -126,15 +127,19 @@
   The keys of a request are those of send!, but for :sink, :allow-pred
   and :signal, which the main process doesn't get. The :signal is checked
   before the request crosses. Its hidden texts go as text, as they go to a
-  server."
+  server. The main process follows the redirects, so the :prepare-fn of
+  the request gives the request of the first hop alone, in the page."
   [invoke]
-  (fn [{:keys [url as signal] :as request}]
+  (fn [{:keys [url as signal prepare-fn] :as request}]
     (if (limits/stopped? signal)
       (js/Promise.reject (limits/aborted url))
-      (let [crossing (-> (http/revealed request)
-                         (update :as #(when (= :bytes %) :bytes)))]
-        (-> (invoke (plain crossing request-keys))
-            (.then response-of)
-            (.then (fn [response]
-                     (cond-> response
-                       (= :json as) (update :body json/read-json)))))))))
+      (-> (if prepare-fn
+            ;; with its query in its URL, as the main process sends it
+            (redirect/hop (http/prepared request))
+            (js/Promise.resolve (http/revealed request)))
+          (.then #(invoke (plain (update % :as (fn [a] (when (= :bytes a) :bytes)))
+                                 request-keys)))
+          (.then response-of)
+          (.then (fn [response]
+                   (cond-> response
+                     (= :json as) (update :body json/read-json))))))))

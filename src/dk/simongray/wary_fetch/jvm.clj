@@ -257,13 +257,15 @@
   a name that doesn't resolve, as url/public? refuses such a name. A
   header value that the JDK would refuse throws ::invalid-header, since
   the JDK's own exception shows the value. Once the :signal of the request
-  says to stop, it throws ::aborted."
+  says to stop, it throws ::aborted. The :prepare-fn of the request, when
+  it has one, gives the request of each hop."
   [request deadline allow-pred]
   (loop [request (update request :url url/legal-url)
          chain   []]
-    (let [{:keys [url method headers body signal]} request
-          uri  (URI. url)
-          left (- deadline (System/currentTimeMillis))]
+    (let [request                                  (update (redirect/hop request) :url url/legal-url)
+          {:keys [url method headers body signal]} request
+          uri                                      (URI. url)
+          left                                     (- deadline (System/currentTimeMillis))]
       (when (limits/stopped? signal)
         (throw (limits/aborted url)))
       (when-not (pos? left)

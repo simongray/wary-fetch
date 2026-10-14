@@ -92,9 +92,14 @@
   the redirects before it and the last request, as a vector. It follows
   the redirects until the instant `deadline` and checks each URL with
   `allow-pred`. A header value that the JDK and node:http refuse rejects
-  with ::invalid-header, since a native client can throw with the value."
+  with ::invalid-header, since a native client can throw with the value.
+  The :prepare-fn of the request, when it has one, gives the request of
+  each hop."
   [^js http request deadline allow-pred]
-  (letfn [(step [{:keys [url headers body] :as request} chain]
+  (letfn [(step [request chain]
+            (.then (redirect/hop request)
+                   #(send-hop (update % :url url/legal-url) chain)))
+          (send-hop [{:keys [url headers body] :as request} chain]
             (cond
               (not (allow-pred url))
               (js/Promise.reject (limits/refusal url))

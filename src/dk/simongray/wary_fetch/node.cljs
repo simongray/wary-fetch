@@ -295,9 +295,13 @@
   redirects until the instant `deadline` and checks each URL with
   `allow-pred`, unless the :signal of the request aborted. A header value
   that node:http would refuse rejects with ::invalid-header, as on the
-  JVM."
+  JVM. The :prepare-fn of the request, when it has one, gives the request
+  of each hop."
   [request deadline allow-pred]
-  (letfn [(step [{:keys [url headers body signal] :as request} chain]
+  (letfn [(step [request chain]
+            (.then (redirect/hop request)
+                   #(send-hop (update % :url url/legal-url) chain)))
+          (send-hop [{:keys [url headers body signal] :as request} chain]
             (-> (if (limits/stopped? signal)
                   (js/Promise.reject (limits/aborted url))
                   (checked! url allow-pred deadline))

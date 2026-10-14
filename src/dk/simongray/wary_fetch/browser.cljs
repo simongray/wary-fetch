@@ -7,6 +7,7 @@
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]
             [dk.simongray.wary-fetch.limits :as limits]
+            [dk.simongray.wary-fetch.redirect :as redirect]
             [dk.simongray.wary-fetch.url :as url]))
 
 (def available?
@@ -160,14 +161,9 @@
                                                     #(abort stop))
                                  (.-signal c))))
 
-(defn send!
-  "A promise of the response to `request`, sent with fetch within
-  `timeout-seconds`, unless `allow-pred` refuses its URL. It rejects with
-  ::aborted when the AbortSignal of its :signal aborts.
-
-  A header value that the JDK and node:http refuse (e.g. one with a line
-  break) rejects with ::invalid-header before fetch sees it, since Node's
-  fetch throws with the value."
+(defn- fetch!
+  "A promise of the response to the `request` of a single hop, sent with
+  fetch within `timeout-seconds`, unless `allow-pred` refuses its URL."
   [request timeout-seconds allow-pred]
   ;; so that the browser's parser, which reads the URL again, reads the
   ;; host that was checked
@@ -205,3 +201,15 @@
             (.catch #(throw (failed %)))
             (.then #(answer % request))
             (.catch #(throw (failed %))))))))
+
+(defn send!
+  "A promise of the response to `request`, sent with fetch within
+  `timeout-seconds`, unless `allow-pred` refuses its URL. It rejects with
+  ::aborted when the AbortSignal of its :signal aborts.
+
+  A header value that the JDK and node:http refuse (e.g. one with a line
+  break) rejects with ::invalid-header before fetch sees it, since Node's
+  fetch throws with the value. Fetch follows the redirects itself, so the
+  :prepare-fn of the request gives the request of the first hop alone."
+  [request timeout-seconds allow-pred]
+  (.then (redirect/hop request) #(fetch! % timeout-seconds allow-pred)))

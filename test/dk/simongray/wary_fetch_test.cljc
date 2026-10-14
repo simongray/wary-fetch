@@ -462,6 +462,11 @@
              (testing "a 303 turns a POST into a GET"
                (call "/see-other" :method :post :body "x")
                (is (= ["POST" "GET"] (map #(nth % 2) @seen))))
+             (testing "a :prepare-fn gives the request of each hop, after the credentials stay behind"
+               (call "/away" :prepare-fn #(assoc-in % [:headers "Authorization"] (str "Hop " (:url %))))
+               (is (= [(str "Hop " base "/away") (str "Hop " other "/feed")] (map last @seen)))
+               (call "/for-now" :prepare-fn #(future (assoc-in % [:headers "Authorization"] "Later")))
+               (is (= ["Later" "Later"] (map last @seen)) "or a future of it"))
              (testing "five redirects at most, and then the redirect itself"
                (is (= 302 (:status (call "/loop"))))
                (is (= 6 (count @seen))))

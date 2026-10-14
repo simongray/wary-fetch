@@ -1,7 +1,7 @@
 (ns ^:no-doc dk.simongray.wary-fetch.browser
   "The client in a browser, or in a runtime without Node's modules: fetch,
   which follows redirects itself and lets a page read an answer from
-  another site only as far as the answer's CORS headers allow."
+  another origin only as far as the answer's CORS headers allow."
   (:require [clojure.string :as str]
             [dk.simongray.wary-fetch.encoding :as encoding]
             [dk.simongray.wary-fetch.headers :as headers]

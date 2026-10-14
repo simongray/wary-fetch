@@ -1,6 +1,6 @@
 (ns dk.simongray.wary-fetch.proxy
   "A proxy on your own server for the requests of a web page, since most
-  servers don't let a page of another site read their answers.
+  servers don't let a page of another origin read their answers.
 
   The proxy fetches any public URL for whoever can reach it, so put it
   behind your login. Its answers come from other sites but have your
@@ -239,8 +239,9 @@
      its url parameter, with `opts` over defaults, and answers with what
      came back.
 
-     Mount it with any router, e.g. Pedestal, ring-jetty or http-kit,
-     behind your login."
+     Mount it at a route behind your login, with any Ring router (e.g.
+     Reitit or Compojure) on any Ring server (e.g. ring-jetty or
+     http-kit)."
      ([]
       (handler {}))
      ([opts]

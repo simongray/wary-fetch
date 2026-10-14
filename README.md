@@ -12,7 +12,7 @@ document you fetched. Requests and responses are plain maps.
 - **Limits on every exchange.** Neither a slow server nor a gzip bomb can
   hold you up.
 - **Secrets that don't leak.** Passwords and tokens stay out of your
-  logs, and they don't follow a redirect to another site.
+  logs, and they don't follow a redirect to another origin.
 - **Polling without waste.** A document that hasn't changed costs next
   to nothing to check, and the response says when to check again.
 
@@ -269,7 +269,7 @@ streams past.
 The proxy
 ---------
 
-A web page can only read an answer from another site when that site
+A web page can only read an answer from another origin when that origin
 allows it with CORS headers, and most don't. To fetch from them anyway,
 make a Ring handler with `proxy/handler` and mount it on your own server
 (behind your login) at a route such as `/proxy`:

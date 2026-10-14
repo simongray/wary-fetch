@@ -399,9 +399,9 @@
     comes back as a 304 with no body
   - :credentials, as authorization takes them
   - :accept, the Accept header, */* by default
-  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them, but with url/public? as the
-    :allow-pred by default
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred,
+    :user-agent, :truncate? and :signal, as send! takes them, but with
+    url/public? as the :allow-pred by default
   - :max-wait-seconds, as headers/not-before takes it
   - :send, the function that sends the request, send! by default"
   ([url]
@@ -488,9 +488,9 @@
   The `opts` are these:
 
   - :headers of the requests
-  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them, but with url/public? as the
-    :allow-pred by default
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred,
+    :user-agent, :truncate? and :signal, as send! takes them, but with
+    url/public? as the :allow-pred by default
   - :send, the function that sends each request, send! by default"
   ([url]
    (fetcher url {}))
@@ -584,9 +584,9 @@
   The `opts` are these:
 
   - :headers of both requests, e.g. an Origin to learn about CORS
-  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred and
-    :user-agent, as send! takes them, but with url/public? as the
-    :allow-pred by default
+  - :timeout-seconds, :max-bytes, :max-redirects, :allow-pred,
+    :user-agent, :truncate? and :signal, as send! takes them, but with
+    url/public? as the :allow-pred by default
   - :send, the function that sends each request, send! by default"
   ([url]
    (probe! url {}))

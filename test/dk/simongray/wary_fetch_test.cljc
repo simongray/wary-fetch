@@ -2,7 +2,8 @@
   "Sending: requests and their credentials, fetch!, the fetcher, probe!
   and the facts of an answer, on both platforms, and on the JVM against
   servers on localhost."
-  (:require [clojure.test :refer [deftest is testing #?(:cljs async)]]
+  (:require #?(:clj [clojure.string :as str])
+            [clojure.test :refer [deftest is testing #?(:cljs async)]]
             [dk.simongray.wary-fetch :as http]
             [dk.simongray.wary-fetch.async :as async]
             #?(:cljs [dk.simongray.wary-fetch.browser :as browser])
@@ -394,10 +395,8 @@
 
 #?(:clj
    (deftest the-version-in-the-user-agent
-     (let [version #"\(def version\s+\"[^\"]*\"\s+\"([^\"]+)\""]
-       (is (= (str "wary-fetch/" (second (re-find version (slurp "build.clj"))))
-              http/user-agent)
-           "the version that build.clj releases"))))
+     (is (str/includes? (slurp "build.clj") (pr-str http/user-agent))
+         "the User-Agent that the jar names with the version of its tag")))
 
 #?(:clj
    (deftest the-user-agent

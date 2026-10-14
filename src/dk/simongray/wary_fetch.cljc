@@ -20,11 +20,12 @@
 
 ;; RFC 9110, section 10.1.5: a product and its version. The bot rules of
 ;; hosts behind Cloudflare refuse a product without one, and some refuse a
-;; comment with a URL, as of 2026-10-11.
+;; comment with a URL, as of 2026-10-11. The jar names its version in place
+;; of dev.
 (def user-agent
   "The User-Agent of a request outside a browser, unless the request names
   another."
-  "wary-fetch/0.15.1")
+  "wary-fetch/dev")
 
 (defn- base64
   "The UTF-8 bytes of `s` in base64."

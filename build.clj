@@ -8,8 +8,8 @@
                                  ; CLOJARS_PASSWORD (a deploy token) set
 
   The version is that of the Git tag on the commit. To release, set the
-  version in the README's install snippet and commit. Tag the commit,
-  e.g. as v0.1.0, and push both:
+  version in the install snippets of the README and doc, and commit. Tag
+  the commit, e.g. as v0.1.0, and push both:
 
       git tag -a v0.1.0 -m 0.1.0
       git push origin master v0.1.0
@@ -23,7 +23,8 @@
   this and paste the new token at both prompts:
 
       security add-generic-password -U -a simongray -s clojars-deploy -w"
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.tools.build.api :as b]))
 
 (def lib
@@ -67,25 +68,32 @@
   "The repository, for the pom."
   "https://github.com/simongray/wary-fetch")
 
-(defn- readme-version
-  "The version that the install snippet of the README names, or nil."
+(defn- snippet-versions
+  "The versions that the install snippets of the README and the pages in
+  doc name, as pairs of a file and a version."
   []
-  (let [snippet (str (java.util.regex.Pattern/quote (str lib))
-                     "\\s+\\{:mvn/version \"([^\"]+)\"")]
-    (second (re-find (re-pattern snippet) (slurp "README.md")))))
+  (let [snippet (re-pattern (str (java.util.regex.Pattern/quote (str lib))
+                                 "\\s+\\{:mvn/version \"([^\"]+)\""))
+        pages   (->> (.listFiles (io/file "doc"))
+                     (filter #(str/ends-with? (.getName ^java.io.File %) ".md"))
+                     sort)]
+    (for [f     (cons (io/file "README.md") pages)
+          :when (.exists ^java.io.File f)
+          [_ v] (re-seq snippet (slurp f))]
+      [(str f) v])))
 
 (defn- check-release!
   "Throw unless the commit is a release: tagged with a version, with no
-  changes beside it, and with that version in the README."
+  changes beside it, and with that version in every install snippet."
   []
   (when (str/ends-with? version "-SNAPSHOT")
     (throw (ex-info "Tag the commit with its version, e.g. v0.1.0, to deploy it"
                     {:version version})))
   (when (seq (git "status --porcelain --untracked-files=no"))
     (throw (ex-info "Commit the changes before deploying" {})))
-  (when (some-> (readme-version) (not= version))
-    (throw (ex-info "The README's install snippet names another version"
-                    {:version version :readme (readme-version)}))))
+  (when-let [stale (seq (remove #(= version (second %)) (snippet-versions)))]
+    (throw (ex-info "An install snippet names another version"
+                    {:version version :snippets (vec stale)}))))
 
 (defn clean
   "Remove everything built."

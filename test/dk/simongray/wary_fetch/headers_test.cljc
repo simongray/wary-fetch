@@ -1,6 +1,7 @@
 (ns dk.simongray.wary-fetch.headers-test
-  "The values of headers: content ranges, links, and when to ask again by
-  Retry-After, Cache-Control and Expires."
+  "The values of headers: content ranges and the If-Range that resumes a
+  file, links, and when to ask again by Retry-After, Cache-Control and
+  Expires."
   (:require [clojure.test :refer [deftest is testing]]
             [dk.simongray.wary-fetch.headers :as headers]))
 
@@ -8,6 +9,27 @@
   (is (= {:start 0 :end 1023 :total 146515} (headers/content-range "bytes 0-1023/146515")))
   (is (= {:start 5 :end 9 :total nil} (headers/content-range "bytes 5-9/*")))
   (is (nil? (headers/content-range "bytes */1000")) "an unsatisfiable range names none"))
+
+(deftest the-size-of-a-whole-file
+  (is (= 146515 (headers/complete-length "bytes 0-1023/146515")))
+  (is (= 1000 (headers/complete-length "Bytes */1000")) "the form of a 416, in any case")
+  (doseq [s [nil "" "bytes 5-9/*" "bytes */*" "bytes */-1"]]
+    (is (nil? (headers/complete-length s)) (pr-str s))))
+
+(deftest a-validator-for-if-range
+  (let [modified "Tue, 13 Oct 2026 12:00:00 GMT"]
+    (is (= "\"v2\"" (headers/if-range {"etag" ["\"v2\""] "last-modified" modified}))
+        "a strong entity tag")
+    (is (nil? (headers/if-range {"etag" "W/\"v2\"" "last-modified" modified
+                                 "date" "Tue, 13 Oct 2026 13:00:00 GMT"}))
+        "not a weak one, nor the date when there's an entity tag")
+    (is (= modified (headers/if-range {"last-modified" modified
+                                       "date"          "Tue, 13 Oct 2026 12:00:01 GMT"}))
+        "a date a second or more before the Date of its answer")
+    (is (nil? (headers/if-range {"last-modified" modified "date" modified}))
+        "not a date that the file can still change within")
+    (is (nil? (headers/if-range {"last-modified" modified})) "nor one without a Date")
+    (is (nil? (headers/if-range {})))))
 
 (deftest when-to-ask-again
   (let [at #inst "2026-09-27T12:00:00Z"]

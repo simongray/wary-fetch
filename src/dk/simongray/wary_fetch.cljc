@@ -452,13 +452,6 @@
       (contains? #{nil "identity"} coding)
       (some-> content-length str/trim parse-long))))
 
-;; RFC 9110, section 14.4
-(defn- unsatisfied-total
-  "The size of the whole file that the Content-Range value `s` of an
-  answer of 416 gives, or nil when it gives none."
-  [s]
-  (some->> s (re-matches #"(?i)\s*bytes\s+\*/(\d{1,15})\s*") second parse-long))
-
 (defn- failed
   "The exception for the answer to a request for the file at `url` whose
   `status` is a failure."
@@ -510,7 +503,7 @@
               ;; the body of a 416 is at most a page about the error
               416 {:bytes (bytes/of [])
                    :start start
-                   :total (unsatisfied-total (h "content-range"))}
+                   :total (headers/complete-length (h "content-range"))}
               (throw (failed url status))))))))))
 
 (defn facts

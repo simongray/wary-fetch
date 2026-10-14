@@ -1,6 +1,7 @@
 (ns dk.simongray.wary-fetch.headers
   "The values of HTTP headers as data: the header maps of responses, links,
-  byte ranges, and when to ask again.
+  byte ranges, the If-Range that resumes a download, and when to ask
+  again.
 
   A map of headers has lower-case names, and each value is a string or a
   vector of strings."
@@ -79,6 +80,49 @@
        :end   (parse-long end)
        :total (when (not= "*" total)
                 (parse-long total))})))
+
+;; RFC 9110, section 14.4: the complete-length of a range-resp or of an
+;; unsatisfied-range
+(defn complete-length
+  "The size of the whole file that the Content-Range header value `s`
+  names, or nil when it names none.
+
+  It reads both forms of the header: that of a 206, e.g. bytes
+  0-1023/146515, and that of a 416, e.g. bytes */146515."
+  [s]
+  (or (:total (content-range s))
+      (some->> s
+               (re-matches #"(?i)\s*bytes\s+\*/(\d{1,15})\s*")
+               second
+               parse-long)))
+
+(defn- strong-date?
+  "Whether the Last-Modified value `last-modified` of an answer is a strong
+  validator, by the Date value `date` of the same answer."
+  [last-modified date]
+  (let [modified (date/epoch-ms last-modified)
+        sent     (date/epoch-ms date)]
+    (boolean (and modified sent (<= (+ modified 1000) sent)))))
+
+;; RFC 9110, section 13.1.5: an If-Range holds a strong validator, and a
+;; date only when there's no entity tag; section 8.8.2.2: a date is strong
+;; when the Date of its answer is at least a second later
+(defn if-range
+  "The If-Range value that resumes the representation of an earlier answer
+  with `headers`, or nil when the answer has no strong validator.
+
+  The value is the entity tag, unless that's weak, and without an entity
+  tag the Last-Modified, when it's at least a second before the Date."
+  [headers]
+  (let [etag          (header headers "etag")
+        last-modified (header headers "last-modified")]
+    (cond
+      etag
+      (when-not (str/starts-with? etag "W/")
+        etag)
+
+      (strong-date? last-modified (header headers "date"))
+      last-modified)))
 
 (defn- byte-range
   "The range that `spec`, one byte range of a Range header, asks for, as a

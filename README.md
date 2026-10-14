@@ -255,9 +255,12 @@ The limits apply to the sink too, which is why the example sets
 `:max-bytes` to nil, for a file that can be larger than 100 MB. Only the body of
 a success goes to the sink, so a 404 still gives its page as the body.
 
-To read a file in parts by byte range, use `http/fetcher`. On the JVM,
-`http/digest!` gives a SHA-256 or another digest of a file as it streams
-past.
+To resume a download that broke off, ask for the rest with a `:range`
+and an If-Range header, which `headers/if-range` makes from the headers of
+the first answer. It's nil when they can't tell whether the file is still
+the same, and the download then starts again. To read a file in parts by
+byte range, use `http/fetcher`. On the JVM, `http/digest!` gives a SHA-256
+or another digest of a file as it streams past.
 
 The proxy
 ---------

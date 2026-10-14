@@ -32,25 +32,20 @@ bytes and their encodings.
 Getting started
 ---------------
 
-The library requires Clojure 1.11+ and Java 11+. For the latest release,
-add it from [Clojars](https://clojars.org/dk.simongray/wary-fetch) to the
-`:deps` in your `deps.edn`:
+It requires Clojure 1.11+ and Java 11+. Add it from
+[Clojars](https://clojars.org/dk.simongray/wary-fetch) to the `:deps` in
+your `deps.edn`:
 
 ```clojure
 dk.simongray/wary-fetch {:mvn/version "0.12.0"}
 ```
 
-For changes that aren't released yet, use the SHA of the latest commit on
-`master` instead:
+For unreleased changes, depend on the latest commit on `master` instead.
+In shadow-cljs, a Git dependency only works through `deps.edn`, so set
+`:deps true` in your `shadow-cljs.edn` too.
 
-```clojure
-dk.simongray/wary-fetch
-{:git/url "https://github.com/simongray/wary-fetch"
- :git/sha "…"}
-```
-
-For ClojureScript, shadow-cljs only reads Git dependencies from
-`deps.edn`, so also set `:deps true` in your `shadow-cljs.edn`.
+Fetching a document
+-------------------
 
 Fetch a document with `http/fetch!`:
 
@@ -343,16 +338,6 @@ Principles
   JavaScript allows. It reads each URL and its host with whatwg-url, so a
   host that a browser would read as an IP address, e.g. 0x7f.1, is checked
   as one.
-
-Versions
---------
-
-Until 1.0, a release that changes the API gets a new minor version, e.g.
-from 0.4.2 to 0.5.0, and one that only fixes gets a new patch version,
-e.g. from 0.4.2 to 0.4.3. A function that's renamed or removed goes
-without a deprecated alias, and the commit of each release says what
-changed. The tests run in CI on Java 11 and 25, in Node and in a
-headless Chrome.
 
 Development
 -----------

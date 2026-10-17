@@ -228,7 +228,10 @@
     (is (= "Mine" (:user-agent (http/fetch-request "https://example.org/feed.xml" {:user-agent "Mine"})))
         "the User-Agent, which send! puts in the headers")
     (is (= "application/rss+xml" (get-in (http/fetch-request "https://example.org/feed.xml" {:accept "application/rss+xml"})
-                                         [:headers "Accept"])))))
+                                         [:headers "Accept"])))
+    (is (= "\"v1\", W/\"v1\"" (get-in (http/fetch-request "https://example.org/feed.xml" {:etag "W/\"v1\""})
+                                      [:headers "If-None-Match"]))
+        "a weak tag after its strong form")))
 
 (deftest forms-and-json-to-post
   (let [form (http/form-request "https://auth.example/token" [["code" "a b"] ["client_id" "https://app.example/"]]

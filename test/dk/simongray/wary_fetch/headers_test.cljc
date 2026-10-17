@@ -16,6 +16,11 @@
   (doseq [s [nil "" "bytes 5-9/*" "bytes */*" "bytes */-1"]]
     (is (nil? (headers/complete-length s)) (pr-str s))))
 
+(deftest the-tags-of-if-none-match
+  (is (= "\"v2\"" (headers/if-none-match "\"v2\"")) "a strong entity tag as it is")
+  (is (= "\"v2\", W/\"v2\"" (headers/if-none-match "W/\"v2\""))
+      "a weak one after its strong form, which a CDN that weakened it matches"))
+
 (deftest a-validator-for-if-range
   (let [modified "Tue, 13 Oct 2026 12:00:00 GMT"]
     (is (= "\"v2\"" (headers/if-range {"etag" ["\"v2\""] "last-modified" modified}))

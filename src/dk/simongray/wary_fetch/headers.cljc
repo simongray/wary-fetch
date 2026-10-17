@@ -104,6 +104,20 @@
         sent     (date/epoch-ms date)]
     (boolean (and modified sent (<= (+ modified 1000) sent)))))
 
+;; RFC 9110, section 13.1.2: an If-None-Match is a list of entity tags,
+;; compared weakly. A CDN that compresses a document can make its tag weak,
+;; e.g. Cloudflare, which then matches only the strong form, and only when
+;; it comes first, so a weak tag goes after its strong form, which matches
+;; the same representation.
+(defn if-none-match
+  "The If-None-Match value that asks whether the representation of the
+  entity tag `etag` is still current: `etag`, after its strong form when
+  it's weak, e.g. \"x\", W/\"x\" for W/\"x\"."
+  [etag]
+  (if (str/starts-with? etag "W/")
+    (str (subs etag 2) ", " etag)
+    etag))
+
 ;; RFC 9110, section 13.1.5: an If-Range holds a strong validator, and a
 ;; date only when there's no entity tag; section 8.8.2.2: a date is strong
 ;; when the Date of its answer is at least a second later

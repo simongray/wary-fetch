@@ -375,7 +375,7 @@
      (with-options
       {:url     url
        :headers (cond-> {"Accept" accept}
-                  etag          (assoc "If-None-Match" etag)
+                  etag          (assoc "If-None-Match" (headers/if-none-match etag))
                   last-modified (assoc "If-Modified-Since" last-modified)
                   auth          (assoc "Authorization" auth))}
       (public-by-default opts)))))
